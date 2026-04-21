@@ -124,28 +124,8 @@ const AdminApp = {
     },
 
     loadSites() {
-        const saved = localStorage.getItem('3pvcSites');
-        this.sites = saved ? JSON.parse(saved) : {};
-        
-        GitHubConfig.fetchSites().then(githubSites => {
-            if (githubSites && Object.keys(githubSites).length > 0) {
-                this.sites = githubSites;
-                localStorage.setItem('3pvcSites', JSON.stringify(githubSites));
-            }
-            this.renderSites();
-            this.renderComplianceSiteSelect();
-        });
-        
+        this.sites = SitesConfig.getSites();
         this.renderSites();
-    },
-
-    async saveSites() {
-        localStorage.setItem('3pvcSites', JSON.stringify(this.sites));
-        
-        const success = await GitHubConfig.saveSites(this.sites);
-        if (success) {
-            UIUtils.showSuccess('Sites saved to cloud');
-        }
     },
 
     renderSites() {
