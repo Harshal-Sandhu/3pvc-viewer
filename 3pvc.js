@@ -15,25 +15,19 @@ const ViewerApp = {
         this.initChart();
         setTimeout(() => {
             if (Object.keys(this.sites).length > 0) {
-                this.autoLoadData();
+                document.getElementById('siteSelect').value = Object.keys(this.sites)[0];
             }
         }, 500);
     },
 
     bindEvents() {
         document.getElementById('siteSelect').addEventListener('change', (e) => {
-            this.onSiteChange(e.target.value);
+            this.activeFilters = {};
         });
 
         document.getElementById('loadData').addEventListener('click', () => {
+            this.activeFilters = {};
             this.loadAllData();
-        });
-
-        document.getElementById('timeFilter').addEventListener('change', () => {
-            if (this.getCurrentSiteConfig()) {
-                this.activeFilters = {};
-                this.loadAllData();
-            }
         });
 
         document.getElementById('exportCsv').addEventListener('click', () => {
@@ -98,27 +92,12 @@ const ViewerApp = {
         });
     },
 
-    onSiteChange(siteName) {
-        if (siteName && this.sites[siteName]) {
-            this.activeFilters = {};
-            this.loadAllData();
-        }
-    },
-
     getCurrentSiteConfig() {
         const siteName = document.getElementById('siteSelect').value;
         if (!siteName || !this.sites[siteName]) {
             return null;
         }
         return this.sites[siteName];
-    },
-
-    async autoLoadData() {
-        const siteNames = Object.keys(this.sites);
-        if (siteNames.length === 1) {
-            document.getElementById('siteSelect').value = siteNames[0];
-            await this.loadAllData();
-        }
     },
 
     async loadAllData() {
