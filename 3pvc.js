@@ -507,10 +507,8 @@ const ViewerApp = {
     },
 
     renderTable(columns, rows, container) {
-        const reordered = this.reorderColumns(columns);
-        
         let html = '<table><thead><tr>';
-        reordered.forEach(col => {
+        columns.forEach(col => {
             html += `<th>${col}</th>`;
         });
         html += '</tr></thead><tbody>';
