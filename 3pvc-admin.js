@@ -9,7 +9,7 @@ const AdminApp = {
         'app_ntpdate', 'app_obstacle_detection_all_sensors', 'app_obstacle_detection_driver',
         'app_openresty', 'app_params_server', 'app_qrlocation_net', 'app_robot_ops_agent',
         'app_route_check', 'app_sick_safetyscanners', 'app_vector', 'app_victoria_metrics',
-        'bot_id', 'bot_status', 'ip', 'vda_version'
+        'bot_id', 'bot_status', 'ip', 'master_version', 'vda_version'
     ],
 
     init() {
