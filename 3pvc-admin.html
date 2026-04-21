@@ -255,7 +255,12 @@
 
             <div class="admin-footer">
                 <span style="color: var(--text-muted); font-size: 0.85rem;">Configure sites to display in 3PVC viewer</span>
-                <a href="3pvc.html" class="btn btn-sm">Go to Viewer</a>
+                <div style="display: flex; gap: 8px;">
+                    <button id="exportSites" class="btn btn-sm">Export Sites</button>
+                    <button id="importSites" class="btn btn-sm">Import Sites</button>
+                    <input type="file" id="importSitesFile" accept=".json" style="display: none;">
+                    <a href="3pvc.html" class="btn btn-sm">Go to Viewer</a>
+                </div>
             </div>
 
             <!-- Add Compliance Data Section -->

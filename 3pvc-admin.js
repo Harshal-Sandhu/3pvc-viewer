@@ -37,6 +37,18 @@ const AdminApp = {
         document.getElementById('addComplianceDataBtn').addEventListener('click', () => {
             this.addComplianceData();
         });
+
+        document.getElementById('exportSites').addEventListener('click', () => {
+            this.exportSites();
+        });
+
+        document.getElementById('importSites').addEventListener('click', () => {
+            document.getElementById('importSitesFile').click();
+        });
+
+        document.getElementById('importSitesFile').addEventListener('change', (e) => {
+            this.importSites(e);
+        });
     },
 
     login() {
@@ -285,6 +297,43 @@ const AdminApp = {
             const input = document.getElementById(`comp_${field}`);
             if (input) input.value = '';
         });
+    },
+
+    exportSites() {
+        const sites = localStorage.getItem('3pvcSites');
+        if (!sites) {
+            UIUtils.showError('No sites to export');
+            return;
+        }
+        const blob = new Blob([sites], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '3pvc-sites.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        UIUtils.showSuccess('Sites exported successfully');
+    },
+
+    importSites(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const sites = JSON.parse(event.target.result);
+                localStorage.setItem('3pvcSites', JSON.stringify(sites));
+                this.sites = sites;
+                this.renderSites();
+                this.renderComplianceSiteSelect();
+                UIUtils.showSuccess('Sites imported successfully');
+            } catch (err) {
+                UIUtils.showError('Invalid file format');
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
     }
 };
 
