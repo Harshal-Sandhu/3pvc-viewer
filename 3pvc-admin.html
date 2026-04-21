@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3PVC - Admin Panel</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .admin-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+        
+        .admin-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .admin-header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        
+        .login-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 32px;
+            max-width: 400px;
+            margin: 80px auto;
+            text-align: center;
+        }
+        
+        .login-card h2 {
+            margin-bottom: 24px;
+        }
+        
+        .login-card .form-group {
+            text-align: left;
+            margin-bottom: 16px;
+        }
+        
+        .login-card .btn {
+            width: 100%;
+            margin-top: 8px;
+        }
+        
+        .error-message {
+            color: var(--danger);
+            font-size: 0.85rem;
+            margin-bottom: 12px;
+            display: none;
+        }
+        
+        .error-message.show {
+            display: block;
+        }
+        
+        .admin-content {
+            display: none;
+        }
+        
+        .admin-content.show {
+            display: block;
+        }
+        
+        .site-list {
+            margin-top: 16px;
+        }
+        
+        .site-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 16px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .site-item-info {
+            flex: 1;
+        }
+        
+        .site-item-name {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        
+        .site-item-ip {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        
+        .site-item-actions {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .add-site-form {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        
+        .add-site-form h3 {
+            margin-bottom: 16px;
+        }
+        
+        .form-row {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .form-row .form-group {
+            flex: 1;
+            margin-bottom: 0;
+        }
+        
+        .admin-footer {
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .compliance-fields-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .compliance-fields-grid .form-group {
+            margin-bottom: 0;
+        }
+        
+        .compliance-fields-grid .form-input {
+            font-size: 0.85rem;
+            padding: 6px 10px;
+        }
+        
+        .response-panel {
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 12px;
+        }
+        
+        .response-panel.success {
+            background: rgba(0, 200, 83, 0.1);
+            border: 1px solid #00c853;
+            color: #00c853;
+        }
+        
+        .response-panel.error {
+            background: rgba(255, 82, 82, 0.1);
+            border: 1px solid #ff5252;
+            color: #ff5252;
+        }
+        
+        .column-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+        
+        .column-checkbox:hover {
+            border-color: var(--primary);
+        }
+        
+        .column-checkbox.selected {
+            background: var(--primary-dim);
+            border-color: var(--primary);
+        }
+    </style>
+</head>
+<body>
+    <div class="admin-container">
+        <header class="admin-header">
+            <h1>3PVC - Admin Panel</h1>
+            <button id="logoutBtn" class="btn btn-sm hidden">Logout</button>
+        </header>
+
+        <!-- Login Form -->
+        <div id="loginPanel" class="login-card">
+            <h2>Login</h2>
+            <div class="form-group">
+                <label for="adminUsername">Username</label>
+                <input type="text" id="adminUsername" class="form-input" placeholder="Username">
+            </div>
+            <div class="form-group">
+                <label for="adminPassword">Password</label>
+                <input type="password" id="adminPassword" class="form-input" placeholder="Password">
+            </div>
+            <div id="loginError" class="error-message">Invalid username or password</div>
+            <button id="loginBtn" class="btn btn-primary">Login</button>
+            <p class="hint-text" style="margin-top: 16px; font-size: 0.8rem; color: var(--text-muted);">Default: admin / product_validation</p>
+        </div>
+
+        <!-- Admin Content -->
+        <div id="adminContent" class="admin-content">
+            <div class="panel-section">
+                <h2>Site Configuration</h2>
+                <p class="hint-text">Configure InfluxDB server for each site.</p>
+                
+                <div id="siteList" class="site-list">
+                    <p class="placeholder-text">No sites configured. Add a site below.</p>
+                </div>
+
+                <div class="add-site-form">
+                    <h3>Add / Update Site</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="siteName">Site Name</label>
+                            <input type="text" id="siteName" class="form-input" placeholder="e.g., Sydney Warehouse">
+                        </div>
+                        <div class="form-group">
+                            <label for="siteIp">InfluxDB IP / Host</label>
+                            <input type="text" id="siteIp" class="form-input" placeholder="e.g., 192.168.1.100">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="sitePort">Port</label>
+                            <input type="number" id="sitePort" class="form-input" value="8086" placeholder="8086">
+                        </div>
+                        <div class="form-group">
+                            <label for="siteDb">Database</label>
+                            <input type="text" id="siteDb" class="form-input" value="GreyOrange" placeholder="GreyOrange">
+                        </div>
+                        <div class="form-group">
+                            <label for="siteMeasurement">Measurement</label>
+                            <input type="text" id="siteMeasurement" class="form-input" value="bot_firmware_details" placeholder="bot_firmware_details">
+                        </div>
+                    </div>
+                    <button id="addSiteBtn" class="btn btn-primary">Save Site</button>
+                </div>
+            </div>
+
+            <div class="admin-footer">
+                <span style="color: var(--text-muted); font-size: 0.85rem;">Configure sites to display in 3PVC viewer</span>
+                <a href="3pvc.html" class="btn btn-sm">Go to Viewer</a>
+            </div>
+
+            <!-- Add Compliance Data Section -->
+            <div class="panel-section" style="margin-top: 24px;">
+                <h2>Add Compliance Data</h2>
+                <p class="hint-text">Add compliance details to InfluxDB for a site.</p>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="complianceSite">Site</label>
+                        <select id="complianceSite" class="form-select">
+                            <option value="">Select site...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="compliance-fields-grid">
+                    <div class="form-group">
+                        <label for="comp_bot_id">Bot ID</label>
+                        <input type="text" id="comp_bot_id" class="form-input" placeholder="Bot ID">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_ip">IP</label>
+                        <input type="text" id="comp_ip" class="form-input" placeholder="IP Address">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_bot_status">Bot Status</label>
+                        <input type="text" id="comp_bot_status" class="form-input" placeholder="Bot Status">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_api_version">API Version</label>
+                        <input type="text" id="comp_api_version" class="form-input" placeholder="API Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_agent_assistant">App Agent Assistant</label>
+                        <input type="text" id="comp_app_agent_assistant" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_audio_package">App Audio Package</label>
+                        <input type="text" id="comp_app_audio_package" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_audio_proxy">App Audio Proxy</label>
+                        <input type="text" id="comp_app_audio_proxy" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_camera_server_ipu">App Camera Server IPU</label>
+                        <input type="text" id="comp_app_camera_server_ipu" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_error_mapper">App Error Mapper</label>
+                        <input type="text" id="comp_app_error_mapper" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_flashholdmc">App FlashholdMC</label>
+                        <input type="text" id="comp_app_flashholdmc" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_fusion_server">App Fusion Server</label>
+                        <input type="text" id="comp_app_fusion_server" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_h100_driver">App H100 Driver</label>
+                        <input type="text" id="comp_app_h100_driver" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_laser_scan_image_saver">App Laser Scan Image Saver</label>
+                        <input type="text" id="comp_app_laser_scan_image_saver" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_log_extractor">App Log Extractor</label>
+                        <input type="text" id="comp_app_log_extractor" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_mcu_logger">App MCU Logger</label>
+                        <input type="text" id="comp_app_mcu_logger" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_metrics_monitor">App Metrics Monitor</label>
+                        <input type="text" id="comp_app_metrics_monitor" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_msg_broker">App Msg Broker</label>
+                        <input type="text" id="comp_app_msg_broker" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_nav_client">App Nav Client</label>
+                        <input type="text" id="comp_app_nav_client" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_nav_process">App Nav Process</label>
+                        <input type="text" id="comp_app_nav_process" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_ntpdate">App NTPdate</label>
+                        <input type="text" id="comp_app_ntpdate" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_obstacle_detection_all_sensors">App Obstacle Detection All Sensors</label>
+                        <input type="text" id="comp_app_obstacle_detection_all_sensors" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_obstacle_detection_driver">App Obstacle Detection Driver</label>
+                        <input type="text" id="comp_app_obstacle_detection_driver" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_openresty">App Openresty</label>
+                        <input type="text" id="comp_app_openresty" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_params_server">App Params Server</label>
+                        <input type="text" id="comp_app_params_server" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_qrlocation_net">App QRLocation Net</label>
+                        <input type="text" id="comp_app_qrlocation_net" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_robot_ops_agent">App Robot Ops Agent</label>
+                        <input type="text" id="comp_app_robot_ops_agent" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_route_check">App Route Check</label>
+                        <input type="text" id="comp_app_route_check" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_sick_safetyscanners">App Sick Safetyscanners</label>
+                        <input type="text" id="comp_app_sick_safetyscanners" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_vector">App Vector</label>
+                        <input type="text" id="comp_app_vector" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_app_victoria_metrics">App Victoria Metrics</label>
+                        <input type="text" id="comp_app_victoria_metrics" class="form-input" placeholder="Version">
+                    </div>
+                    <div class="form-group">
+                        <label for="comp_vda_version">VDA Version</label>
+                        <input type="text" id="comp_vda_version" class="form-input" placeholder="VDA Version">
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="selectAllColumns">
+                        <span>Select/Deselect All Columns</span>
+                    </label>
+                </div>
+
+                <div id="columnSelector" class="column-selector" style="margin: 12px 0; display: flex; flex-wrap: wrap; gap: 8px;">
+                    <!-- Columns will be rendered here -->
+                </div>
+
+                <button id="addComplianceDataBtn" class="btn btn-primary">Add Compliance Data</button>
+                <div id="complianceResult" class="response-panel hidden" style="margin-top: 16px;"></div>
+            </div>
+        </div>
+        </div>
+    </div>
+
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="utils.js"></script>
+    <script src="3pvc-admin.js"></script>
+</body>
+</html>
