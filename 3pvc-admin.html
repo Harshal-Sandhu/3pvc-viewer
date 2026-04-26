@@ -146,6 +146,54 @@
             margin-bottom: 0;
         }
         
+        .compliance-fields-grid .form-input,
+        .release-notes-list .form-input {
+            font-size: 0.85rem;
+            padding: 6px 10px;
+        }
+        
+        .release-notes-list .note-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+        
+        .release-notes-list .note-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .release-notes-list .note-version {
+            font-weight: 600;
+            color: var(--primary);
+        }
+        
+        .release-notes-list .note-date {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        
+        .release-notes-list .note-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        
+        .release-notes-list .note-description {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+        }
+        
+        .release-notes-list .note-notes {
+            font-size: 0.85rem;
+            color: #aaa;
+            white-space: pre-wrap;
+        }
+        
         .compliance-fields-grid .form-input {
             font-size: 0.85rem;
             padding: 6px 10px;
@@ -261,6 +309,51 @@
                     <input type="file" id="importSitesFile" accept=".json" style="display: none;">
                     <a href="3pvc.html" class="btn btn-sm">Go to Viewer</a>
                 </div>
+            </div>
+
+            <!-- Release Notes Section -->
+            <div class="panel-section" style="margin-top: 24px;">
+                <h2>Release Notes</h2>
+                <p class="hint-text">Add release notes for each site.</p>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="releaseSite">Site</label>
+                        <select id="releaseSite" class="form-select">
+                            <option value="">Select site...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="releaseVersion">Version</label>
+                        <input type="text" id="releaseVersion" class="form-input" placeholder="e.g., 1.0.0">
+                    </div>
+                    <div class="form-group">
+                        <label for="releaseDate">Date</label>
+                        <input type="date" id="releaseDate" class="form-input">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="releaseTitle">Title</label>
+                    <input type="text" id="releaseTitle" class="form-input" placeholder="Release title">
+                </div>
+
+                <div class="form-group">
+                    <label for="releaseDescription">Description</label>
+                    <input type="text" id="releaseDescription" class="form-input" placeholder="Brief description">
+                </div>
+
+                <div class="form-group">
+                    <label for="releaseNotes">Notes</label>
+                    <textarea id="releaseNotes" class="form-input" rows="4" placeholder="Detailed release notes"></textarea>
+                </div>
+
+                <button id="addReleaseNoteBtn" class="btn btn-primary">Add Release Note</button>
+
+                <div id="releaseNotesList" class="release-notes-list" style="margin-top: 20px;"></div>
             </div>
 
             <!-- Add Compliance Data Section -->

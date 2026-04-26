@@ -49,6 +49,14 @@ const AdminApp = {
         document.getElementById('importSitesFile').addEventListener('change', (e) => {
             this.importSites(e);
         });
+
+        document.getElementById('releaseSite').addEventListener('change', (e) => {
+            this.onReleaseSiteChange(e.target.value);
+        });
+
+        document.getElementById('addReleaseNoteBtn').addEventListener('click', () => {
+            this.addReleaseNote();
+        });
     },
 
     login() {
@@ -80,18 +88,96 @@ const AdminApp = {
         document.getElementById('adminContent').classList.add('show');
         document.getElementById('logoutBtn').classList.remove('hidden');
         this.renderComplianceSiteSelect();
+        this.renderReleaseNotesSelect();
         this.renderColumnSelector();
     },
 
-    renderComplianceSiteSelect() {
+renderComplianceSiteSelect() {
         const select = document.getElementById('complianceSite');
         select.innerHTML = '<option value="">Select site...</option>';
-        Object.keys(this.sites).forEach(name => {
+        SitesConfig.getSiteNames().forEach(name => {
             const option = document.createElement('option');
             option.value = name;
             option.textContent = name;
             select.appendChild(option);
         });
+    },
+
+    renderReleaseNotesSelect() {
+        const select = document.getElementById('releaseSite');
+        select.innerHTML = '<option value="">Select site...</option>';
+        SitesConfig.getSiteNames().forEach(name => {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            select.appendChild(option);
+        });
+    },
+
+    onReleaseSiteChange(siteName) {
+        this.renderReleaseNotes(siteName);
+    },
+
+    renderReleaseNotes(siteName) {
+        const container = document.getElementById('releaseNotesList');
+        const notes = SitesConfig.getReleaseNotes(siteName);
+
+        if (notes.length === 0) {
+            container.innerHTML = '<p class="placeholder-text">No release notes for this site.</p>';
+            return;
+        }
+
+        container.innerHTML = notes.map((note, index) => `
+            <div class="note-item">
+                <div class="note-item-header">
+                    <span class="note-version">v${note.version}</span>
+                    <span class="note-date">${note.date}</span>
+                </div>
+                <div class="note-title">${note.title}</div>
+                <div class="note-description">${note.description}</div>
+                <div class="note-notes">${note.notes}</div>
+            </div>
+        `).join('');
+    },
+
+    addReleaseNote() {
+        const siteName = document.getElementById('releaseSite').value;
+        const version = document.getElementById('releaseVersion').value.trim();
+        const date = document.getElementById('releaseDate').value;
+        const title = document.getElementById('releaseTitle').value.trim();
+        const description = document.getElementById('releaseDescription').value.trim();
+        const notes = document.getElementById('releaseNotes').value.trim();
+
+        if (!siteName) {
+            UIUtils.showError('Please select a site');
+            return;
+        }
+
+        if (!version || !title) {
+            UIUtils.showError('Version and Title are required');
+            return;
+        }
+
+        const note = {
+            version,
+            date: date || new Date().toISOString().split('T')[0],
+            title,
+            description,
+            notes
+        };
+
+        SitesConfig.addReleaseNote(siteName, note);
+        this.renderReleaseNotes(siteName);
+        this.clearReleaseNoteForm();
+        UIUtils.showSuccess('Release note added');
+    },
+
+    clearReleaseNoteForm() {
+        document.getElementById('releaseVersion').value = '';
+        document.getElementById('releaseDate').value = '';
+        document.getElementById('releaseTitle').value = '';
+        document.getElementById('releaseDescription').value = '';
+        document.getElementById('releaseNotes').value = '';
     },
 
     renderColumnSelector() {

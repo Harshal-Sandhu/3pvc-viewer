@@ -20,6 +20,36 @@ const SitesConfig = {
         }
     },
 
+    releaseNotes: {
+        "owen_n_minor": [
+            {
+                version: "1.0.0",
+                date: "2024-01-01",
+                title: "Initial Release",
+                description: "Initial firmware release",
+                notes: "Base firmware for Owen bot"
+            }
+        ],
+        "walmartpot_staging": [
+            {
+                version: "1.0.0",
+                date: "2024-01-01",
+                title: "Initial Release",
+                description: "Initial firmware release",
+                notes: "Base firmware for Walmart staging bot"
+            }
+        ],
+        "Apotek_inc_server": [
+            {
+                version: "1.0.0",
+                date: "2024-01-01",
+                title: "Initial Release",
+                description: "Initial firmware release",
+                notes: "Base firmware for Apotek bot"
+            }
+        ]
+    },
+
     getSites() {
         return this.sites;
     },
@@ -30,5 +60,20 @@ const SitesConfig = {
 
     getSiteNames() {
         return Object.keys(this.sites);
+    },
+
+    getReleaseNotes(siteName) {
+        return this.releaseNotes[siteName] || [];
+    },
+
+    addReleaseNote(siteName, note) {
+        if (!this.releaseNotes[siteName]) {
+            this.releaseNotes[siteName] = [];
+        }
+        this.releaseNotes[siteName].unshift(note);
+    },
+
+    setReleaseNotes(siteName, notes) {
+        this.releaseNotes[siteName] = notes;
     }
 };

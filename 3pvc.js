@@ -7,6 +7,7 @@ const ViewerApp = {
     activeFilters: {},
     distinctValues: {},
     currentFilterColumn: null,
+    showOnlyUnique: false,
     comparisonResults: { total: 0, matched: 0, mismatched: [], botsData: {} },
 
     async init() {
@@ -28,6 +29,10 @@ const ViewerApp = {
         document.getElementById('loadData').addEventListener('click', () => {
             this.activeFilters = {};
             this.loadAllData();
+        });
+
+        document.getElementById('uniquesOnly').addEventListener('change', (e) => {
+            this.showOnlyUnique = e.target.checked;
         });
 
         document.getElementById('exportCsv').addEventListener('click', () => {
@@ -148,6 +153,21 @@ const ViewerApp = {
                 return;
             }
 
+            // Filter for unique IPs if checkbox is checked
+            if (this.showOnlyUnique && this.parsedData.columns.includes('ip')) {
+              const ipIndex = this.parsedData.columns.indexOf('ip');
+              const seen = new Set();
+              const filteredRows = [];
+              for (const row of this.parsedData.rows) {
+                const ip = row[ipIndex];
+                if (!seen.has(ip)) {
+                  seen.add(ip);
+                  filteredRows.push(row);
+                }
+              }
+              this.parsedData.rows = filteredRows;
+            }
+
             this.computeDistinctValues();
             this.displayResults();
             this.updateActiveFiltersUI();
@@ -166,12 +186,11 @@ const ViewerApp = {
         const site = this.getCurrentSiteConfig();
         if (!site) return;
 
-        const timeRange = document.getElementById('timeFilter').value;
         const database = site.db || 'GreyOrange';
 
         try {
             const serverConfig = { server: site.ip, port: parseInt(site.port) || 8086 };
-            const query = `SELECT * FROM "compliance_details" WHERE time > now() - ${timeRange} ORDER BY time DESC LIMIT 10000`;
+            const query = `SELECT * FROM "compliance_details" ORDER BY time DESC LIMIT 10000`;
             const result = await InfluxUtils.queryServer(serverConfig, database, query);
             
             this.complianceData = InfluxUtils.parseQueryResult(result);
@@ -636,6 +655,40 @@ const ViewerApp = {
 
         document.getElementById('tableView').classList.toggle('hidden', view !== 'table');
         document.getElementById('chartView').classList.toggle('hidden', view !== 'chart');
+        document.getElementById('releaseView').classList.toggle('hidden', view !== 'releases');
+
+        if (view === 'releases') {
+            this.renderReleaseNotes();
+        }
+    },
+
+    renderReleaseNotes() {
+        const siteName = document.getElementById('siteSelect').value;
+        const container = document.getElementById('releaseNotesContainer');
+
+        if (!siteName) {
+            container.innerHTML = '<p class="placeholder-text">Select a site to view release notes.</p>';
+            return;
+        }
+
+        const notes = SitesConfig.getReleaseNotes(siteName);
+
+        if (notes.length === 0) {
+            container.innerHTML = '<p class="placeholder-text">No release notes for this site.</p>';
+            return;
+        }
+
+        container.innerHTML = notes.map(note => `
+            <div class="note-item">
+                <div class="note-header">
+                    <span class="note-version">v${note.version}</span>
+                    <span class="note-date">${note.date}</span>
+                </div>
+                <div class="note-title">${note.title}</div>
+                <div class="note-description">${note.description}</div>
+                <div class="note-content">${note.notes}</div>
+            </div>
+        `).join('');
     },
 
     initChart() {
