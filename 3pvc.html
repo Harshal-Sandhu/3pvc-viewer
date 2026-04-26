@@ -471,11 +471,28 @@
             min-width: 100px;
         }
         
+        .summary-stats .stat-box:hover {
+            background: var(--primary-dim);
+        }
+        
         .summary-stats .stat-number {
             display: block;
             font-size: 1.5rem;
             font-weight: 700;
             color: var(--primary);
+        }
+        
+        .version-popup-content h3 {
+            margin: 0;
+        }
+        
+        .version-item {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .version-item:last-child {
+            border-bottom: none;
         }
         
         .summary-stats .stat-label {
@@ -636,6 +653,38 @@
             <button class="btn" data-view="releases">Release Notes</button>
         </div>
 
+        <!-- Summary Section - Above Tables -->
+        <div class="compliance-card" style="margin-top: 20px;">
+            <div class="compliance-header">
+                <h3>Summary</h3>
+            </div>
+            <div id="summaryStats" class="summary-stats" style="display: flex; gap: 24px; flex-wrap: wrap;">
+                <div class="stat-box" style="cursor: pointer;" id="uniqueBotsBox">
+                    <span class="stat-number" id="uniqueBotsCount">0</span>
+                    <span class="stat-label">Unique Bots</span>
+                </div>
+                <div class="stat-box" style="cursor: pointer;" id="vdaVersionsBox">
+                    <span class="stat-number" id="vdaVersionsCount">0</span>
+                    <span class="stat-label">VDA Versions</span>
+                </div>
+                <div class="stat-box" style="cursor: pointer;" id="firmwareVersionsBox">
+                    <span class="stat-number" id="firmwareVersionsCount">0</span>
+                    <span class="stat-label">Firmware Versions</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Version List Popup -->
+        <div id="versionListPopup" class="version-popup" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; overflow-y: auto;">
+            <div class="version-popup-content" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; max-width: 500px; margin: 100px auto; max-height: 70vh; overflow-y: auto;">
+                <div class="version-popup-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color);">
+                    <h3 id="versionListTitle">Version List</h3>
+                    <button id="closeVersionPopup" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 20px;">×</button>
+                </div>
+                <div id="versionListContent" style="font-size: 0.9rem;"></div>
+            </div>
+        </div>
+
         <div id="tableView" class="view-panel">
             <div class="results-card">
                 <div class="results-header">
@@ -667,15 +716,15 @@
                     <h3>Summary</h3>
                 </div>
                 <div id="summaryStats" class="summary-stats" style="display: flex; gap: 24px; flex-wrap: wrap;">
-                    <div class="stat-box">
+                    <div class="stat-box" style="cursor: pointer;" id="uniqueBotsBox">
                         <span class="stat-number" id="uniqueBotsCount">0</span>
                         <span class="stat-label">Unique Bots</span>
                     </div>
-                    <div class="stat-box">
+                    <div class="stat-box" style="cursor: pointer;" id="vdaVersionsBox">
                         <span class="stat-number" id="vdaVersionsCount">0</span>
                         <span class="stat-label">VDA Versions</span>
                     </div>
-                    <div class="stat-box">
+                    <div class="stat-box" style="cursor: pointer;" id="firmwareVersionsBox">
                         <span class="stat-number" id="firmwareVersionsCount">0</span>
                         <span class="stat-label">Firmware Versions</span>
                     </div>

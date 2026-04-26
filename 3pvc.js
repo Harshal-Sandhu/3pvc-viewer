@@ -8,6 +8,9 @@ const ViewerApp = {
     distinctValues: {},
     currentFilterColumn: null,
     showOnlyUnique: false,
+    uniqueBotIds: [],
+    uniqueVdaVersions: [],
+    uniqueFirmwareVersions: [],
     comparisonResults: { total: 0, matched: 0, mismatched: [], botsData: {} },
 
     async init() {
@@ -33,6 +36,22 @@ const ViewerApp = {
 
         document.getElementById('uniquesOnly').addEventListener('change', (e) => {
             this.showOnlyUnique = e.target.checked;
+        });
+
+        document.getElementById('uniqueBotsBox').addEventListener('click', () => {
+            this.showVersionList('Unique Bots', this.uniqueBotIds);
+        });
+
+        document.getElementById('vdaVersionsBox').addEventListener('click', () => {
+            this.showVersionList('VDA Versions', this.uniqueVdaVersions);
+        });
+
+        document.getElementById('firmwareVersionsBox').addEventListener('click', () => {
+            this.showVersionList('Firmware Versions', this.uniqueFirmwareVersions);
+        });
+
+        document.getElementById('closeVersionPopup').addEventListener('click', () => {
+            document.getElementById('versionListPopup').style.display = 'none';
         });
 
         document.getElementById('exportCsv').addEventListener('click', () => {
@@ -510,6 +529,9 @@ const ViewerApp = {
             document.getElementById('uniqueBotsCount').textContent = '0';
             document.getElementById('vdaVersionsCount').textContent = '0';
             document.getElementById('firmwareVersionsCount').textContent = '0';
+            this.uniqueBotIds = [];
+            this.uniqueVdaVersions = [];
+            this.uniqueFirmwareVersions = [];
             return;
         }
 
@@ -531,9 +553,25 @@ const ViewerApp = {
             });
         });
 
-        document.getElementById('uniqueBotsCount').textContent = uniqueBots.size;
-        document.getElementById('vdaVersionsCount').textContent = uniqueVda.size;
-        document.getElementById('firmwareVersionsCount').textContent = uniqueFirmware.size;
+        this.uniqueBotIds = Array.from(uniqueBots).sort();
+        this.uniqueVdaVersions = Array.from(uniqueVda).sort();
+        this.uniqueFirmwareVersions = Array.from(uniqueFirmware).sort();
+
+        document.getElementById('uniqueBotsCount').textContent = this.uniqueBotIds.length;
+        document.getElementById('vdaVersionsCount').textContent = this.uniqueVdaVersions.length;
+        document.getElementById('firmwareVersionsCount').textContent = this.uniqueFirmwareVersions.length;
+    },
+
+    showVersionList(title, list) {
+        if (!list || list.length === 0) {
+            document.getElementById('versionListContent').innerHTML = '<p>No items found</p>';
+        } else {
+            document.getElementById('versionListContent').innerHTML = list.map(item => 
+                `<div class="version-item">${item}</div>`
+            ).join('');
+        }
+        document.getElementById('versionListTitle').textContent = title;
+        document.getElementById('versionListPopup').style.display = 'block';
     },
 
     renderTable(columns, rows, container) {
