@@ -450,12 +450,37 @@
             z-index: 10;
         }
         
-        .compliance-card {
+.compliance-card {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 20px;
-            margin-top: 20px;
+        }
+        
+        .summary-stats {
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+        
+        .summary-stats .stat-box {
+            text-align: center;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border-radius: 6px;
+            min-width: 100px;
+        }
+        
+        .summary-stats .stat-number {
+            display: block;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        .summary-stats .stat-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
         }
         
         .compliance-header {
@@ -633,6 +658,27 @@
                 </div>
                 <div class="compliance-table-container">
                     <div id="complianceTable" class="results-table"></div>
+                </div>
+            </div>
+
+            <!-- Summary Section -->
+            <div class="compliance-card" style="margin-top: 20px;">
+                <div class="compliance-header">
+                    <h3>Summary</h3>
+                </div>
+                <div id="summaryStats" class="summary-stats" style="display: flex; gap: 24px; flex-wrap: wrap;">
+                    <div class="stat-box">
+                        <span class="stat-number" id="uniqueBotsCount">0</span>
+                        <span class="stat-label">Unique Bots</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-number" id="vdaVersionsCount">0</span>
+                        <span class="stat-label">VDA Versions</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-number" id="firmwareVersionsCount">0</span>
+                        <span class="stat-label">Firmware Versions</span>
+                    </div>
                 </div>
             </div>
         </div>

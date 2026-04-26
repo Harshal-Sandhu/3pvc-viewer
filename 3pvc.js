@@ -496,11 +496,44 @@ const ViewerApp = {
                 </div>
             `;
             this.updateChart({ columns: [], rows: [] });
+            this.updateSummary([], parsed.columns);
             return;
         }
 
         this.renderTableWithFilters(parsed.columns, parsed.rows);
         this.updateChart(parsed);
+        this.updateSummary(parsed.rows, parsed.columns);
+    },
+
+    updateSummary(rows, columns) {
+        if (!columns || columns.length === 0) {
+            document.getElementById('uniqueBotsCount').textContent = '0';
+            document.getElementById('vdaVersionsCount').textContent = '0';
+            document.getElementById('firmwareVersionsCount').textContent = '0';
+            return;
+        }
+
+        const botIdIdx = columns.indexOf('bot_id');
+        const vdaIdx = columns.indexOf('vda_version');
+        
+        const firmwareColumns = columns.filter(col => col && col.startsWith('app_'));
+
+        const uniqueBots = new Set();
+        const uniqueVda = new Set();
+        const uniqueFirmware = new Set();
+
+        rows.forEach(row => {
+            if (botIdIdx !== -1 && row[botIdIdx]) uniqueBots.add(row[botIdIdx]);
+            if (vdaIdx !== -1 && row[vdaIdx]) uniqueVda.add(row[vdaIdx]);
+            firmwareColumns.forEach(fwCol => {
+                const fwIdx = columns.indexOf(fwCol);
+                if (fwIdx !== -1 && row[fwIdx]) uniqueFirmware.add(row[fwIdx]);
+            });
+        });
+
+        document.getElementById('uniqueBotsCount').textContent = uniqueBots.size;
+        document.getElementById('vdaVersionsCount').textContent = uniqueVda.size;
+        document.getElementById('firmwareVersionsCount').textContent = uniqueFirmware.size;
     },
 
     renderTable(columns, rows, container) {
