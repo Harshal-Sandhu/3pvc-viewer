@@ -565,6 +565,33 @@
             font-size: 0.9rem;
             color: #ccc;
         }
+
+        .bot-search-widget {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px 20px;
+        }
+
+        .bot-search-bar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .bot-search-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .bot-search-header h4 {
+            margin: 0;
+            font-size: 1rem;
+        }
     </style>
 </head>
 <body>
@@ -645,6 +672,24 @@
             <span style="color: var(--text-muted); font-size: 0.85rem;">Filters:</span>
             <div id="activeFilterTags"></div>
             <button id="clearAllFilters" class="btn btn-sm">Clear All</button>
+        </div>
+
+        <!-- Bot Search Widget -->
+        <div class="bot-search-widget" style="margin-bottom: 20px;">
+            <div class="bot-search-bar">
+                <input type="text" id="botSearchInput" class="form-input" placeholder="Enter Bot ID..." style="flex: 1;">
+                <button id="botSearchBtn" class="btn btn-primary">Search</button>
+                <button id="botSearchClear" class="btn btn-sm" style="display: none;">Clear</button>
+            </div>
+            <div id="botSearchResults" style="display: none; margin-top: 16px;">
+                <div class="bot-search-header">
+                    <h4 id="botSearchTitle">Results</h4>
+                    <span id="botSearchCount" class="stat-label"></span>
+                </div>
+                <div class="table-scroll-container">
+                    <div id="botSearchTable" class="results-table"></div>
+                </div>
+            </div>
         </div>
 
         <div class="btn-group" style="margin-bottom: 20px;">

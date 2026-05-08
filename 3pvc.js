@@ -34,6 +34,18 @@ const ViewerApp = {
             this.loadAllData();
         });
 
+        document.getElementById('botSearchBtn').addEventListener('click', () => {
+            this.searchBot();
+        });
+
+        document.getElementById('botSearchInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') this.searchBot();
+        });
+
+        document.getElementById('botSearchClear').addEventListener('click', () => {
+            this.clearBotSearch();
+        });
+
         document.getElementById('uniquesOnly').addEventListener('change', (e) => {
             this.showOnlyUnique = e.target.checked;
         });
@@ -719,7 +731,68 @@ const ViewerApp = {
         this.loadData();
     },
 
+    async searchBot() {
+        const input = document.getElementById('botSearchInput');
+        const botId = input.value.trim();
+        if (!botId) {
+            UIUtils.showError('Please enter a Bot ID');
+            return;
+        }
+
+        const site = this.getCurrentSiteConfig();
+        if (!site) {
+            UIUtils.showError('Please select a site');
+            return;
+        }
+
+        const database = site.db || 'GreyOrange';
+        const measurement = site.measurement || 'bot_firmware_version_details';
+
+        try {
+            const serverConfig = { server: site.ip, port: parseInt(site.port) || 8086 };
+            const query = `SELECT * FROM "${measurement}" WHERE "bot_id" = '${this.escapeValue(botId)}' ORDER BY time DESC LIMIT 10000`;
+            const result = await InfluxUtils.queryServer(serverConfig, database, query);
+            const parsed = InfluxUtils.parseQueryResult(result);
+
+            if (parsed.error) {
+                UIUtils.showError(parsed.error);
+                return;
+            }
+
+            this.displayBotSearchResults(parsed, botId);
+        } catch (error) {
+            UIUtils.showError(error.message);
+        }
+    },
+
+    displayBotSearchResults(parsed, botId) {
+        const container = document.getElementById('botSearchResults');
+        const title = document.getElementById('botSearchTitle');
+        const count = document.getElementById('botSearchCount');
+        const table = document.getElementById('botSearchTable');
+        const clearBtn = document.getElementById('botSearchClear');
+
+        if (!parsed.columns.length || parsed.rows.length === 0) {
+            UIUtils.showInfo(`No records found for Bot ID: ${botId}`);
+            return;
+        }
+
+        title.textContent = `Results for Bot ID: ${botId}`;
+        count.textContent = `${parsed.rows.length} record(s) found`;
+        clearBtn.style.display = 'inline-block';
+
+        this.renderTable(parsed.columns, parsed.rows, table);
+        container.style.display = 'block';
+    },
+
+    clearBotSearch() {
+        document.getElementById('botSearchResults').style.display = 'none';
+        document.getElementById('botSearchClear').style.display = 'none';
+        document.getElementById('botSearchInput').value = '';
+    },
+
     switchView(view) {
+        console.log('switchView called:', view);
         document.querySelectorAll('.btn-group .btn').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.view === view);
         });
@@ -727,8 +800,13 @@ const ViewerApp = {
         document.getElementById('tableView').classList.toggle('hidden', view !== 'table');
         document.getElementById('chartView').classList.toggle('hidden', view !== 'chart');
         document.getElementById('releaseView').classList.toggle('hidden', view !== 'releases');
+        document.getElementById('summaryStats').parentElement.classList.toggle('hidden', view === 'releases');
 
         if (view === 'releases') {
+            const siteSelect = document.getElementById('siteSelect');
+            if (!siteSelect.value && Object.keys(this.sites).length > 0) {
+                siteSelect.value = Object.keys(this.sites)[0];
+            }
             this.renderReleaseNotes();
         }
     },
