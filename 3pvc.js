@@ -586,7 +586,32 @@ const ViewerApp = {
         document.getElementById('versionListPopup').style.display = 'block';
     },
 
+    reorderDisplayColumns(columns, rows) {
+        const priority = ['time', 'bot_id', 'vda_version'];
+        const order = [];
+        const remaining = [];
+
+        columns.forEach((col, i) => {
+            const idx = priority.indexOf(col);
+            if (idx !== -1) {
+                order[idx] = i;
+            } else {
+                remaining.push(i);
+            }
+        });
+
+        const newOrder = order.filter(i => i !== undefined).concat(remaining);
+        const newColumns = newOrder.map(i => columns[i]);
+        const newRows = rows.map(row => newOrder.map(i => row[i]));
+
+        return { columns: newColumns, rows: newRows };
+    },
+
     renderTable(columns, rows, container) {
+        const reordered = this.reorderDisplayColumns(columns, rows);
+        columns = reordered.columns;
+        rows = reordered.rows;
+
         let html = '<table><thead><tr>';
         columns.forEach(col => {
             html += `<th>${col}</th>`;
@@ -610,6 +635,10 @@ const ViewerApp = {
     },
 
     renderTableWithFilters(columns, rows) {
+        const reordered = this.reorderDisplayColumns(columns, rows);
+        columns = reordered.columns;
+        rows = reordered.rows;
+
         const container = document.getElementById('resultsTable');
         
         let html = '<table><thead><tr>';
