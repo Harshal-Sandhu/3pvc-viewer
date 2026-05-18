@@ -1,0 +1,501 @@
+'use strict';
+
+const express = require('express');
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
+const fs = require('fs');
+const path = require('path');
+require('dotenv').config();
+
+const {
+    HOST = '127.0.0.1',
+    PORT = '3000',
+    SESSION_SECRET,
+    ADMIN_USER,
+    ADMIN_PASSWORD_HASH,
+    VIEWER_USER = '',
+    VIEWER_PASSWORD_HASH = '',
+    NODE_ENV = 'development'
+} = process.env;
+
+for (const [k, v] of Object.entries({ SESSION_SECRET, ADMIN_USER, ADMIN_PASSWORD_HASH })) {
+    if (!v) {
+        console.error(`Missing required env var: ${k}`);
+        process.exit(1);
+    }
+}
+const hasViewer = !!(VIEWER_USER && VIEWER_PASSWORD_HASH);
+if (hasViewer) {
+    console.log(`Viewer login enabled: ${VIEWER_USER}`);
+} else {
+    console.log('No VIEWER_USER set — only the admin account can log in (admin has both view + admin access).');
+}
+
+const SITES_PATH = path.join(__dirname, 'sites.json');
+let sites;
+try {
+    sites = JSON.parse(fs.readFileSync(SITES_PATH, 'utf8'));
+} catch (e) {
+    console.error('Failed to load sites.json:', e.message);
+    process.exit(1);
+}
+
+for (const [name, s] of Object.entries(sites)) {
+    if (!s.ip || !s.port || !s.db || !s.measurement) {
+        console.error(`sites.json: site "${name}" is missing required fields`);
+        process.exit(1);
+    }
+}
+
+const app = express();
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+
+app.use((req, res, next) => {
+    res.setHeader('Content-Security-Policy',
+        "default-src 'self'; " +
+        "script-src 'self'; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; " +
+        "connect-src 'self'; " +
+        "frame-ancestors 'none'; " +
+        "base-uri 'self'");
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'same-origin');
+    res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    next();
+});
+
+app.use(express.json({ limit: '64kb' }));
+app.use(session({
+    name: 'sid',
+    secret: SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
+    cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: NODE_ENV === 'production',
+        maxAge: 12 * 60 * 60 * 1000
+    }
+}));
+
+const failedLogins = new Map();
+const LOCK_AFTER = 5;
+const LOCK_FOR_MS = 15 * 60 * 1000;
+
+function loginThrottle(req, res, next) {
+    const entry = failedLogins.get(req.ip);
+    if (entry && entry.until > Date.now()) {
+        const seconds = Math.ceil((entry.until - Date.now()) / 1000);
+        return res.status(429).json({ error: `Too many attempts. Try again in ${seconds}s.` });
+    }
+    next();
+}
+
+function requireAuth(req, res, next) {
+    if (!req.session || !req.session.user) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    next();
+}
+
+function requireAdmin(req, res, next) {
+    if (!req.session || !req.session.user) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    if (req.session.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin role required' });
+    }
+    next();
+}
+
+async function authenticate(username, password) {
+    // Admin first — admin role is a superset of viewer.
+    if (username === ADMIN_USER && await bcrypt.compare(password, ADMIN_PASSWORD_HASH)) {
+        return 'admin';
+    }
+    if (hasViewer && username === VIEWER_USER && await bcrypt.compare(password, VIEWER_PASSWORD_HASH)) {
+        return 'viewer';
+    }
+    return null;
+}
+
+app.post('/api/login', loginThrottle, async (req, res) => {
+    const { username, password } = req.body || {};
+    if (typeof username !== 'string' || typeof password !== 'string') {
+        return res.status(400).json({ error: 'Invalid request' });
+    }
+
+    const role = await authenticate(username, password);
+
+    if (role) {
+        failedLogins.delete(req.ip);
+        req.session.regenerate(err => {
+            if (err) return res.status(500).json({ error: 'Session error' });
+            req.session.user = username;
+            req.session.role = role;
+            res.json({ ok: true, role });
+        });
+        return;
+    }
+
+    const entry = failedLogins.get(req.ip) || { count: 0, until: 0 };
+    entry.count += 1;
+    if (entry.count >= LOCK_AFTER) entry.until = Date.now() + LOCK_FOR_MS;
+    failedLogins.set(req.ip, entry);
+    res.status(401).json({ error: 'Invalid credentials' });
+});
+
+app.post('/api/logout', (req, res) => {
+    if (!req.session) return res.json({ ok: true });
+    req.session.destroy(() => {
+        res.clearCookie('sid');
+        res.json({ ok: true });
+    });
+});
+
+app.get('/api/me', (req, res) => {
+    res.json({
+        authenticated: !!(req.session && req.session.user),
+        user: (req.session && req.session.user) || null,
+        role: (req.session && req.session.role) || null
+    });
+});
+
+// Compliance fields whitelist. Same set as the legacy 3pvc-admin viewer.
+const COMPLIANCE_FIELDS = [
+    'api_version', 'app_agent_assistant', 'app_audio_package', 'app_audio_proxy',
+    'app_camera_server_ipu', 'app_error_mapper', 'app_flashholdmc', 'app_fusion_server',
+    'app_h100_driver', 'app_laser_scan_image_saver', 'app_log_extractor', 'app_mcu_logger',
+    'app_metrics_monitor', 'app_msg_broker', 'app_nav_client', 'app_nav_process',
+    'app_ntpdate', 'app_obstacle_detection_all_sensors', 'app_obstacle_detection_driver',
+    'app_openresty', 'app_params_server', 'app_qrlocation_net', 'app_robot_ops_agent',
+    'app_route_check', 'app_sick_safetyscanners', 'app_vector', 'app_victoria_metrics',
+    'bot_id', 'bot_status', 'ip', 'master_version', 'vda_version'
+];
+const COMPLIANCE_FIELD_SET = new Set(COMPLIANCE_FIELDS);
+
+function siteToPublic(name, s) {
+    return {
+        name,
+        ip: s.ip,
+        port: s.port,
+        db: s.db,
+        measurement: s.measurement,
+        complianceMeasurement: s.complianceMeasurement || 'compliance_details',
+        releasedVdaVersion: s.releasedVdaVersion || '',
+        recipients: Array.isArray(s.recipients) ? s.recipients : [],
+        alertSchedule: normalizeSchedule(s.alertSchedule)
+    };
+}
+
+function normalizeSchedule(sched) {
+    const s = sched && typeof sched === 'object' ? sched : {};
+    return {
+        enabled: !!s.enabled,
+        frequency: VALID_FREQUENCIES.has(s.frequency) ? s.frequency : 'daily',
+        time: typeof s.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(s.time) ? s.time : '08:00',
+        dayOfWeek: Number.isInteger(s.dayOfWeek) && s.dayOfWeek >= 0 && s.dayOfWeek <= 6 ? s.dayOfWeek : 1
+    };
+}
+
+const VALID_FREQUENCIES = new Set(['hourly', 'daily', 'weekdays', 'weekly']);
+
+function validateRecipients(input) {
+    if (input == null) return { ok: true, value: [] };
+    let list;
+    if (Array.isArray(input)) list = input;
+    else if (typeof input === 'string') list = input.split(',');
+    else return { ok: false, error: 'recipients must be an array or comma-separated string' };
+    const out = [];
+    for (const raw of list) {
+        const v = String(raw).trim();
+        if (!v) continue;
+        if (v.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+            return { ok: false, error: `Invalid email: ${v}` };
+        }
+        out.push(v);
+    }
+    return { ok: true, value: out };
+}
+
+function validateAlertSchedule(input) {
+    if (input == null) return { ok: true, value: undefined };
+    if (typeof input !== 'object') return { ok: false, error: 'alertSchedule must be an object' };
+    if (input.frequency != null && !VALID_FREQUENCIES.has(input.frequency)) {
+        return { ok: false, error: `alertSchedule.frequency must be one of: ${Array.from(VALID_FREQUENCIES).join(', ')}` };
+    }
+    if (input.time != null && !(typeof input.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(input.time))) {
+        return { ok: false, error: 'alertSchedule.time must be HH:MM (24h)' };
+    }
+    if (input.dayOfWeek != null && !(Number.isInteger(input.dayOfWeek) && input.dayOfWeek >= 0 && input.dayOfWeek <= 6)) {
+        return { ok: false, error: 'alertSchedule.dayOfWeek must be 0-6 (0=Sun)' };
+    }
+    return { ok: true, value: normalizeSchedule(input) };
+}
+
+app.get('/api/sites', requireAuth, (req, res) => {
+    res.json(Object.entries(sites).map(([name, s]) => siteToPublic(name, s)));
+});
+
+app.get('/api/compliance-fields', requireAuth, (req, res) => {
+    res.json(COMPLIANCE_FIELDS);
+});
+
+function saveSites() {
+    const tmp = SITES_PATH + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(sites, null, 2));
+    fs.renameSync(tmp, SITES_PATH);
+}
+
+function validateSiteFields(body, { allowName = false } = {}) {
+    const errors = [];
+    if (allowName) {
+        if (!body.name || typeof body.name !== 'string') errors.push('name is required');
+        else if (!/^[a-zA-Z0-9_\-]+$/.test(body.name)) errors.push('name may only contain letters, numbers, "_", and "-"');
+        else if (body.name.length > 64) errors.push('name is too long');
+    }
+    if (body.ip != null) {
+        if (typeof body.ip !== 'string' || !/^[a-zA-Z0-9.\-]{1,253}$/.test(body.ip)) errors.push('ip must be a valid hostname or IPv4');
+    }
+    if (body.port != null) {
+        const p = Number(body.port);
+        if (!Number.isInteger(p) || p <= 0 || p > 65535) errors.push('port must be an integer 1-65535');
+    }
+    if (body.db != null) {
+        if (typeof body.db !== 'string' || !body.db || body.db.length > 128) errors.push('db must be a non-empty string');
+    }
+    if (body.measurement != null) {
+        if (typeof body.measurement !== 'string' || !body.measurement || body.measurement.length > 128) errors.push('measurement must be a non-empty string');
+    }
+    if (body.complianceMeasurement != null) {
+        if (typeof body.complianceMeasurement !== 'string' || body.complianceMeasurement.length > 128) errors.push('complianceMeasurement must be a string');
+    }
+    if (body.releasedVdaVersion != null) {
+        if (typeof body.releasedVdaVersion !== 'string' || body.releasedVdaVersion.length > 64) errors.push('releasedVdaVersion must be a string up to 64 chars');
+    }
+    if (body.recipients !== undefined) {
+        const r = validateRecipients(body.recipients);
+        if (!r.ok) errors.push(r.error);
+    }
+    if (body.alertSchedule !== undefined) {
+        const r = validateAlertSchedule(body.alertSchedule);
+        if (!r.ok) errors.push(r.error);
+    }
+    return errors;
+}
+
+app.post('/api/sites', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const errors = validateSiteFields(body, { allowName: true });
+    if (!body.ip) errors.push('ip is required');
+    if (!body.port) errors.push('port is required');
+    if (!body.db) errors.push('db is required');
+    if (!body.measurement) errors.push('measurement is required');
+    if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+    if (sites[body.name]) return res.status(409).json({ error: 'Site already exists' });
+
+    const recipientsCheck = validateRecipients(body.recipients);
+    if (!recipientsCheck.ok) return res.status(400).json({ error: recipientsCheck.error });
+    const scheduleCheck = validateAlertSchedule(body.alertSchedule);
+    if (!scheduleCheck.ok) return res.status(400).json({ error: scheduleCheck.error });
+
+    sites[body.name] = {
+        ip: body.ip,
+        port: Number(body.port),
+        db: body.db,
+        measurement: body.measurement,
+        complianceMeasurement: body.complianceMeasurement || 'compliance_details',
+        releasedVdaVersion: (body.releasedVdaVersion || '').trim(),
+        recipients: recipientsCheck.value,
+        alertSchedule: scheduleCheck.value || normalizeSchedule()
+    };
+    try {
+        saveSites();
+    } catch (err) {
+        delete sites[body.name];
+        console.error('Failed to persist sites.json:', err);
+        return res.status(500).json({ error: 'Failed to save' });
+    }
+    res.status(201).json({ ok: true, site: siteToPublic(body.name, sites[body.name]) });
+});
+
+app.put('/api/sites/:name', requireAdmin, (req, res) => {
+    const { name } = req.params;
+    if (!sites[name]) return res.status(404).json({ error: 'Unknown site' });
+    const body = req.body || {};
+    const errors = validateSiteFields(body);
+    if (errors.length) return res.status(400).json({ error: errors.join('; ') });
+
+    const s = sites[name];
+    if (body.ip != null) s.ip = body.ip;
+    if (body.port != null) s.port = Number(body.port);
+    if (body.db != null) s.db = body.db;
+    if (body.measurement != null) s.measurement = body.measurement;
+    if (body.complianceMeasurement != null) s.complianceMeasurement = body.complianceMeasurement || 'compliance_details';
+    if (body.releasedVdaVersion != null) s.releasedVdaVersion = body.releasedVdaVersion.trim();
+    if (body.recipients !== undefined) {
+        const r = validateRecipients(body.recipients);
+        if (!r.ok) return res.status(400).json({ error: r.error });
+        s.recipients = r.value;
+    }
+    if (body.alertSchedule !== undefined) {
+        const r = validateAlertSchedule(body.alertSchedule);
+        if (!r.ok) return res.status(400).json({ error: r.error });
+        s.alertSchedule = r.value;
+    }
+
+    try {
+        saveSites();
+    } catch (err) {
+        console.error('Failed to persist sites.json:', err);
+        return res.status(500).json({ error: 'Failed to save' });
+    }
+    res.json({ ok: true, site: siteToPublic(name, s) });
+});
+
+app.delete('/api/sites/:name', requireAdmin, (req, res) => {
+    const { name } = req.params;
+    if (!sites[name]) return res.status(404).json({ error: 'Unknown site' });
+    const backup = sites[name];
+    delete sites[name];
+    try {
+        saveSites();
+    } catch (err) {
+        sites[name] = backup;
+        console.error('Failed to persist sites.json:', err);
+        return res.status(500).json({ error: 'Failed to save' });
+    }
+    res.json({ ok: true });
+});
+
+// InfluxDB line-protocol field value escaping: backslash and double-quote.
+function escapeFieldString(s) {
+    return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+app.post('/api/compliance/:site', requireAdmin, async (req, res) => {
+    const { site } = req.params;
+    if (!sites[site]) return res.status(404).json({ error: 'Unknown site' });
+    const body = req.body || {};
+    if (typeof body !== 'object') return res.status(400).json({ error: 'Invalid body' });
+
+    const filtered = {};
+    for (const [k, v] of Object.entries(body)) {
+        if (!COMPLIANCE_FIELD_SET.has(k)) continue;
+        if (typeof v !== 'string') continue;
+        const trimmed = v.trim();
+        if (!trimmed) continue;
+        if (trimmed.length > 256) return res.status(400).json({ error: `${k} is too long` });
+        filtered[k] = trimmed;
+    }
+    if (!filtered.api_version) {
+        return res.status(400).json({ error: 'api_version is required' });
+    }
+    if (Object.keys(filtered).length === 0) {
+        return res.status(400).json({ error: 'No valid fields provided' });
+    }
+
+    const s = sites[site];
+    const measurement = s.complianceMeasurement || 'compliance_details';
+    const fieldStr = Object.entries(filtered)
+        .map(([k, v]) => `${k}="${escapeFieldString(v)}"`)
+        .join(',');
+    const line = `${measurement} ${fieldStr}`;
+
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 20000);
+    try {
+        const url = `http://${s.ip}:${s.port}/write?db=${encodeURIComponent(s.db)}`;
+        const r = await fetch(url, { method: 'POST', body: line, signal: ac.signal });
+        if (!r.ok) {
+            const text = await r.text();
+            return res.status(502).json({ error: `InfluxDB write failed (HTTP ${r.status}): ${text || r.statusText}` });
+        }
+        res.json({ ok: true, written: Object.keys(filtered).length });
+    } catch (err) {
+        const msg = err.name === 'AbortError' ? 'InfluxDB write timed out' : 'InfluxDB write failed: ' + err.message;
+        res.status(502).json({ error: msg });
+    } finally {
+        clearTimeout(timer);
+    }
+});
+
+const alerts = require('./lib/alerts');
+
+app.post('/api/alerts/:site/send', requireAdmin, async (req, res) => {
+    const { site } = req.params;
+    if (!sites[site]) return res.status(404).json({ error: 'Unknown site' });
+    try {
+        const result = await alerts.sendReport(site, sites[site]);
+        res.json({ ok: true, recipients: result.recipients, totals: result.totals });
+    } catch (err) {
+        console.error(`Alert send failed for ${site}:`, err);
+        res.status(502).json({ error: err.message || 'Failed to send alert' });
+    }
+});
+
+function isReadOnlyInfluxQL(q) {
+    if (typeof q !== 'string') return false;
+    const trimmed = q.trim();
+    if (!trimmed || trimmed.length > 4096) return false;
+    if (trimmed.includes(';')) return false;
+    const upper = trimmed.toUpperCase();
+    if (!(upper.startsWith('SELECT ') || upper.startsWith('SHOW '))) return false;
+    const forbidden = [' INTO ', ' DROP ', ' DELETE ', ' ALTER ', ' GRANT ', ' REVOKE ', ' CREATE ', ' KILL '];
+    return !forbidden.some(w => upper.includes(w));
+}
+
+app.get('/api/query', requireAuth, async (req, res) => {
+    const { site, q } = req.query;
+    if (typeof site !== 'string' || !sites[site]) {
+        return res.status(400).json({ error: 'Unknown site' });
+    }
+    if (!isReadOnlyInfluxQL(q)) {
+        return res.status(400).json({ error: 'Only single SELECT or SHOW statements are allowed' });
+    }
+    const s = sites[site];
+    const url = `http://${s.ip}:${s.port}/query?db=${encodeURIComponent(s.db)}&q=${encodeURIComponent(q)}`;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 20000);
+    try {
+        const r = await fetch(url, { signal: ac.signal });
+        const text = await r.text();
+        res.status(r.status).type('application/json').send(text);
+    } catch (err) {
+        const msg = err.name === 'AbortError' ? 'InfluxDB request timed out' : 'InfluxDB request failed';
+        res.status(502).json({ error: msg });
+    } finally {
+        clearTimeout(timer);
+    }
+});
+
+app.use((req, res, next) => {
+    if (req.path === '/' || req.path.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-store');
+    }
+    next();
+});
+
+app.use(express.static(path.join(__dirname, 'public'), {
+    extensions: ['html'],
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
+    }
+}));
+
+app.use((req, res) => res.status(404).json({ error: 'Not found' }));
+
+app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err);
+    res.status(500).json({ error: 'Server error' });
+});
+
+const port = Number(PORT);
+app.listen(port, HOST, () => {
+    console.log(`influxdb-ui v2 listening on http://${HOST}:${port}`);
+    console.log(`NODE_ENV=${NODE_ENV}`);
+});

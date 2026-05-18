@@ -1,0 +1,25 @@
+{
+  "name": "influxdb-ui-v2",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Read-only InfluxDB firmware viewer with server-side auth and allowlisted proxy",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "hash-password": "node scripts/hash-password.js",
+    "oauth-setup": "node scripts/oauth-setup.js",
+    "scheduler": "node scheduler.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.7"
+  }
+}

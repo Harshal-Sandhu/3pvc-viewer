@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>3PVC Viewer</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div id="login-view" class="view">
+        <form id="login-form" class="card login-card" autocomplete="off">
+            <h1>3PVC Viewer</h1>
+            <p class="muted">Sign in to continue</p>
+            <label>Username
+                <input type="text" id="login-user" autocomplete="username" required>
+            </label>
+            <label>Password
+                <input type="password" id="login-pass" autocomplete="current-password" required>
+            </label>
+            <button type="submit" id="login-btn">Sign in</button>
+            <p id="login-error" class="error" hidden></p>
+        </form>
+    </div>
+
+    <div id="app-view" class="view" hidden>
+        <header class="topbar">
+            <h1>3PVC Viewer</h1>
+            <div class="topbar-right">
+                <span id="last-refreshed" class="muted small" hidden></span>
+                <label class="inline small muted">
+                    Auto-refresh
+                    <select id="auto-refresh">
+                        <option value="0">Off</option>
+                        <option value="30">30s</option>
+                        <option value="60">1m</option>
+                        <option value="300">5m</option>
+                    </select>
+                </label>
+                <button id="help-btn" type="button" class="btn-subtle" title="Keyboard shortcuts (?)" aria-label="Help">?</button>
+                <a href="/operation" class="btn-subtle" role="button">Operation</a>
+                <a href="/admin" id="admin-link" class="btn-subtle" role="button" hidden>Admin</a>
+                <span id="who" class="muted small"></span>
+                <button id="logout-btn" type="button" class="btn-subtle">Sign out</button>
+            </div>
+        </header>
+
+        <section class="controls card">
+            <label>Site
+                <select id="site-select"></select>
+            </label>
+            <label>Lookback
+                <select id="lookback">
+                    <option value="1h">Last 1h</option>
+                    <option value="6h">Last 6h</option>
+                    <option value="1d" selected>Last 1 day</option>
+                    <option value="2d">Last 2 days</option>
+                    <option value="7d">Last 7 days</option>
+                    <option value="30d">Last 30 days</option>
+                    <option value="__custom">Custom…</option>
+                </select>
+            </label>
+            <label id="lookback-custom-wrap" hidden>Custom range
+                <input type="text" id="lookback-custom" placeholder="e.g. 48h, 3d, 2w" autocomplete="off">
+                <span class="hint">Number + unit: <code>m</code>/<code>h</code>/<code>d</code>/<code>w</code> (InfluxDB duration).</span>
+            </label>
+            <button id="load-btn" type="button">Load data</button>
+            <button id="export-btn" type="button" class="btn-subtle" disabled>Export CSV</button>
+            <label class="search-wrap">
+                <input type="search" id="filter-input" placeholder="Filter (Cmd/Ctrl+K)" autocomplete="off">
+            </label>
+        </section>
+
+        <section class="stats">
+            <button type="button" class="stat-card" data-action="all"><span class="stat-label">Total bots</span><span class="stat-value" id="stat-bots">—</span></button>
+            <button type="button" class="stat-card" data-action="vda"><span class="stat-label">Unique VDA</span><span class="stat-value" id="stat-vda">—</span></button>
+            <button type="button" class="stat-card stat-ok" data-action="matched"><span class="stat-label">Compliant</span><span class="stat-value" id="stat-matched">—</span></button>
+            <button type="button" class="stat-card stat-bad" data-action="mismatch"><span class="stat-label">Mismatched</span><span class="stat-value" id="stat-mismatch">—</span></button>
+        </section>
+
+        <section class="card chart-card" id="chart-card" hidden>
+            <div class="card-head">
+                <h2 class="card-title">VDA version distribution</h2>
+                <span class="muted small">Click a bar to filter</span>
+            </div>
+            <div id="chart" class="chart"></div>
+        </section>
+
+        <details id="vda-alert-section" class="card vda-alert-section" hidden>
+            <summary class="vda-alert-header">
+                <span class="vda-alert-chevron" aria-hidden="true">▸</span>
+                <h2>Compliance Mismatches</h2>
+                <span class="vda-alert-badge" id="vda-alert-count">0</span>
+            </summary>
+            <div id="vda-alert-list" class="vda-alert-list"></div>
+        </details>
+
+        <section id="chips-bar" class="chips-bar" hidden>
+            <span class="muted small">Active filters:</span>
+            <div id="chips"></div>
+            <button id="clear-filters" type="button" class="btn-subtle btn-small">Clear all</button>
+        </section>
+
+        <section class="card">
+            <div class="table-toolbar">
+                <label class="inline small muted">
+                    <input type="checkbox" id="unique-only"> Latest record per bot only
+                </label>
+                <div class="spacer"></div>
+                <div class="col-menu-wrap">
+                    <button id="col-menu-btn" type="button" class="btn-subtle btn-small">Columns</button>
+                    <div id="col-menu" class="popover" hidden></div>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table id="data-table">
+                    <thead><tr id="data-head"></tr></thead>
+                    <tbody id="data-body"></tbody>
+                </table>
+                <p id="empty-state" class="muted center">Select a site and click Load data.</p>
+            </div>
+            <p id="row-count" class="muted small center"></p>
+        </section>
+
+        <section class="card" id="compliance-card">
+            <div class="card-head">
+                <h2 class="card-title">Compliance details (<span id="compliance-measurement" class="muted">—</span>)</h2>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    <span id="compliance-status" class="muted small"></span>
+                    <button id="compliance-load" type="button" class="btn-subtle btn-small">Refresh</button>
+                    <button id="compliance-export" type="button" class="btn-subtle btn-small" disabled>Export CSV</button>
+                </div>
+            </div>
+            <div class="table-toolbar">
+                <input type="search" id="compliance-filter" placeholder="Filter compliance rows..." autocomplete="off">
+            </div>
+            <div class="table-wrap">
+                <table id="compliance-table">
+                    <thead><tr id="compliance-head"></tr></thead>
+                    <tbody id="compliance-body"></tbody>
+                </table>
+                <p id="compliance-empty" class="muted center">Select a site and click Load data.</p>
+            </div>
+            <p id="compliance-count" class="muted small center"></p>
+        </section>
+    </div>
+
+    <!-- Filter dropdown (positioned via JS) -->
+    <div id="filter-popover" class="popover" hidden>
+        <div class="popover-head">
+            <input type="search" id="filter-popover-search" placeholder="Search values..." autocomplete="off">
+        </div>
+        <div class="popover-body" id="filter-popover-list"></div>
+        <div class="popover-foot">
+            <button id="filter-popover-clear" type="button" class="btn-subtle btn-small">Clear</button>
+            <button id="filter-popover-apply" type="button" class="btn-small">Apply</button>
+        </div>
+    </div>
+
+    <!-- Row detail panel -->
+    <aside id="detail-panel" class="detail-panel" hidden>
+        <div class="detail-head">
+            <h2 id="detail-title">Row details</h2>
+            <button id="detail-close" type="button" class="btn-subtle btn-small" aria-label="Close">Close</button>
+        </div>
+        <dl id="detail-body" class="detail-body"></dl>
+    </aside>
+
+    <!-- Help modal -->
+    <div id="help-modal" class="modal-backdrop" hidden>
+        <div class="modal card">
+            <div class="card-head">
+                <h2 class="card-title">Keyboard shortcuts</h2>
+                <button id="help-close" type="button" class="btn-subtle btn-small">Close</button>
+            </div>
+            <dl class="kbd-list">
+                <dt><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>K</kbd></dt><dd>Focus filter input</dd>
+                <dt><kbd>R</kbd></dt><dd>Reload data</dd>
+                <dt><kbd>U</kbd></dt><dd>Toggle "latest per bot"</dd>
+                <dt><kbd>Esc</kbd></dt><dd>Close panel / dropdown / modal</dd>
+                <dt><kbd>?</kbd></dt><dd>Show this help</dd>
+            </dl>
+        </div>
+    </div>
+
+    <!-- Toasts -->
+    <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+
+    <script src="/app.js" type="module"></script>
+</body>
+</html>

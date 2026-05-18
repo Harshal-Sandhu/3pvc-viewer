@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>3PVC Admin</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div id="login-view" class="view">
+        <form id="login-form" class="card login-card" autocomplete="off">
+            <h1>3PVC Admin</h1>
+            <p class="muted">Sign in to continue</p>
+            <label>Username
+                <input type="text" id="login-user" autocomplete="username" required>
+            </label>
+            <label>Password
+                <input type="password" id="login-pass" autocomplete="current-password" required>
+            </label>
+            <button type="submit" id="login-btn">Sign in</button>
+            <p id="login-error" class="error" hidden></p>
+        </form>
+    </div>
+
+    <div id="admin-view" class="view" hidden>
+        <header class="topbar">
+            <h1>3PVC Admin</h1>
+            <div class="topbar-right">
+                <a href="/" class="btn-subtle" role="button">Open viewer</a>
+                <a href="/operation" class="btn-subtle" role="button">Operation</a>
+                <span id="who" class="muted small"></span>
+                <button id="logout-btn" type="button" class="btn-subtle">Sign out</button>
+            </div>
+        </header>
+
+        <section class="card">
+            <div class="card-head">
+                <h2 class="card-title">Sites</h2>
+                <button id="add-site-btn" type="button">+ Add site</button>
+            </div>
+            <p class="muted small" style="margin:0 0 0.75rem;">Sites are stored in <code>sites.json</code> on the server and shared by all users.</p>
+            <div class="table-wrap" style="max-height:none;">
+                <table id="sites-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Host</th>
+                            <th>Database</th>
+                            <th>Main measurement</th>
+                            <th>Compliance measurement</th>
+                            <th>Alerts</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="sites-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-head">
+                <h2 class="card-title">Add compliance record</h2>
+            </div>
+            <p class="muted small" style="margin:0 0 0.75rem;">
+                Writes one record to the selected site's compliance measurement using InfluxDB line protocol.
+                Empty fields are skipped. <code>api_version</code> is required.
+            </p>
+            <form id="compliance-form" autocomplete="off">
+                <div class="form-row">
+                    <label>Site
+                        <select id="comp-site" required></select>
+                    </label>
+                    <span class="muted small" id="comp-target"></span>
+                </div>
+                <div id="comp-fields" class="comp-fields-grid"></div>
+                <div class="form-actions">
+                    <button type="submit" id="comp-submit">Submit</button>
+                    <button type="button" id="comp-clear" class="btn-subtle">Clear all fields</button>
+                </div>
+            </form>
+        </section>
+    </div>
+
+    <!-- Add/edit site modal -->
+    <div id="site-modal" class="modal-backdrop" hidden>
+        <form id="site-form" class="modal card" autocomplete="off">
+            <div class="card-head">
+                <h2 class="card-title" id="site-modal-title">Add site</h2>
+                <button type="button" id="site-modal-close" class="btn-subtle btn-small">Close</button>
+            </div>
+            <input type="hidden" id="site-original-name">
+            <p class="muted small" style="margin:0 0 0.75rem;">
+                A site = one InfluxDB instance you want to view. Provide where it lives (IP + port),
+                which database and measurements to read from, and a short name to identify it in the viewer dropdown.
+            </p>
+            <div class="form-grid">
+                <label>Name
+                    <input type="text" id="site-name" required pattern="[a-zA-Z0-9_\-]+" placeholder="e.g. acme_warehouse">
+                    <span class="hint">Short identifier shown in the viewer's site dropdown. Letters, numbers, "_" or "-".</span>
+                </label>
+                <label>Host (IP or hostname)
+                    <input type="text" id="site-ip" required placeholder="e.g. 192.168.1.10">
+                    <span class="hint">The machine running InfluxDB for this site.</span>
+                </label>
+                <label>Port
+                    <input type="number" id="site-port" required min="1" max="65535" value="8086">
+                    <span class="hint">InfluxDB HTTP port. Default 8086.</span>
+                </label>
+                <label>Database
+                    <input type="text" id="site-db" required value="GreyOrange">
+                    <span class="hint">InfluxDB database name (the one the site writes its data into).</span>
+                </label>
+                <label>Main measurement
+                    <input type="text" id="site-measurement" required value="bot_firmware_version_details">
+                    <span class="hint">Measurement loaded into the main table — bot firmware data.</span>
+                </label>
+                <label>Compliance measurement
+                    <input type="text" id="site-compliance-measurement" value="compliance_details">
+                    <span class="hint">Measurement loaded into the compliance table — the validation team's "expected" records.</span>
+                </label>
+                <label class="form-grid-wide">Alert recipients
+                    <input type="text" id="site-recipients" placeholder="alice@example.com, bob@example.com">
+                    <span class="hint">Comma-separated email addresses. Falls back to <code>REPORT_RECIPIENT</code> from .env if blank.</span>
+                </label>
+                <label class="form-grid-wide">
+                    <span class="checkbox-row">
+                        <input type="checkbox" id="site-alert-enabled">
+                        <span>Automated alerts enabled</span>
+                    </span>
+                    <span class="hint">If on, the scheduler process sends the report on the cadence below. The "Send report now" button works regardless.</span>
+                </label>
+                <label>Frequency
+                    <select id="site-alert-frequency">
+                        <option value="daily">Daily</option>
+                        <option value="weekdays">Weekdays (Mon–Fri)</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="hourly">Hourly</option>
+                    </select>
+                </label>
+                <label>Time (24h)
+                    <input type="time" id="site-alert-time" value="08:00">
+                    <span class="hint">Ignored for hourly (uses the minute portion only).</span>
+                </label>
+                <label id="site-alert-dow-wrap" hidden>Day of week
+                    <select id="site-alert-dow">
+                        <option value="1">Monday</option>
+                        <option value="2">Tuesday</option>
+                        <option value="3">Wednesday</option>
+                        <option value="4">Thursday</option>
+                        <option value="5">Friday</option>
+                        <option value="6">Saturday</option>
+                        <option value="0">Sunday</option>
+                    </select>
+                </label>
+            </div>
+            <div class="form-actions">
+                <button type="submit" id="site-save">Save</button>
+                <button type="button" id="site-cancel" class="btn-subtle">Cancel</button>
+            </div>
+            <p id="site-error" class="error" hidden></p>
+        </form>
+    </div>
+
+    <!-- Delete confirm modal -->
+    <div id="delete-modal" class="modal-backdrop" hidden>
+        <div class="modal card">
+            <div class="card-head">
+                <h2 class="card-title">Delete site</h2>
+                <button type="button" id="delete-modal-close" class="btn-subtle btn-small">Close</button>
+            </div>
+            <p>Delete <strong id="delete-site-name"></strong>? This removes the entry from <code>sites.json</code>. InfluxDB data is not touched.</p>
+            <div class="form-actions">
+                <button type="button" id="delete-confirm" class="btn-danger">Delete</button>
+                <button type="button" id="delete-cancel" class="btn-subtle">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+
+    <script src="/admin.js" type="module"></script>
+</body>
+</html>

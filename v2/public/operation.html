@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>3PVC Operation</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div id="login-view" class="view">
+        <form id="login-form" class="card login-card" autocomplete="off">
+            <h1>3PVC Operation</h1>
+            <p class="muted">Sign in to continue</p>
+            <label>Username
+                <input type="text" id="login-user" autocomplete="username" required>
+            </label>
+            <label>Password
+                <input type="password" id="login-pass" autocomplete="current-password" required>
+            </label>
+            <button type="submit" id="login-btn">Sign in</button>
+            <p id="login-error" class="error" hidden></p>
+        </form>
+    </div>
+
+    <div id="app-view" class="view" hidden>
+        <header class="topbar">
+            <h1>3PVC Operation</h1>
+            <div class="topbar-right">
+                <a href="/" class="btn-subtle" role="button">Viewer</a>
+                <a href="/admin" id="admin-link" class="btn-subtle" role="button" hidden>Admin</a>
+                <span id="who" class="muted small"></span>
+                <button id="logout-btn" type="button" class="btn-subtle">Sign out</button>
+            </div>
+        </header>
+
+        <section class="controls card">
+            <label>Site
+                <select id="site-select"></select>
+            </label>
+            <label>Bot
+                <select id="bot-select" disabled>
+                    <option value="">Select site first…</option>
+                </select>
+                <span class="hint" id="bot-hint">—</span>
+            </label>
+            <label>Lookback
+                <select id="lookback">
+                    <option value="1h">Last 1h</option>
+                    <option value="6h">Last 6h</option>
+                    <option value="1d">Last 1 day</option>
+                    <option value="2d">Last 2 days</option>
+                    <option value="7d" selected>Last 7 days</option>
+                    <option value="30d">Last 30 days</option>
+                    <option value="__custom">Custom…</option>
+                </select>
+            </label>
+            <label id="lookback-custom-wrap" hidden>Custom range
+                <input type="text" id="lookback-custom" placeholder="e.g. 48h, 3d, 2w" autocomplete="off">
+                <span class="hint">Number + unit: <code>m</code>/<code>h</code>/<code>d</code>/<code>w</code>.</span>
+            </label>
+            <label>Rows
+                <select id="row-limit">
+                    <option value="10" selected>Last 10</option>
+                    <option value="25">Last 25</option>
+                    <option value="50">Last 50</option>
+                    <option value="100">Last 100</option>
+                    <option value="500">Last 500</option>
+                    <option value="__custom">Custom…</option>
+                </select>
+            </label>
+            <label id="row-limit-custom-wrap" hidden>Custom rows
+                <input type="number" id="row-limit-custom" min="1" max="100000" placeholder="e.g. 200" autocomplete="off">
+            </label>
+            <div class="col-menu-wrap">
+                <label>Fields to query
+                    <button id="fields-menu-btn" type="button" class="btn-subtle btn-small" disabled>Choose fields…</button>
+                </label>
+                <div id="fields-menu" class="popover" hidden></div>
+            </div>
+            <button id="load-btn" type="button" disabled>Load rows</button>
+            <button id="export-btn" type="button" class="btn-subtle" disabled>Export CSV</button>
+        </section>
+
+        <section class="card">
+            <div class="table-toolbar">
+                <span id="query-summary" class="muted small">Select a site and a bot to load rows.</span>
+                <div class="spacer"></div>
+                <div class="col-menu-wrap">
+                    <button id="col-menu-btn" type="button" class="btn-subtle btn-small" disabled>Columns</button>
+                    <div id="col-menu" class="popover" hidden></div>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table id="data-table">
+                    <thead><tr id="data-head"></tr></thead>
+                    <tbody id="data-body"></tbody>
+                </table>
+                <p id="empty-state" class="muted center">No rows loaded yet.</p>
+            </div>
+            <p id="row-count" class="muted small center"></p>
+        </section>
+    </div>
+
+    <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+
+    <script src="/operation.js" type="module"></script>
+</body>
+</html>
