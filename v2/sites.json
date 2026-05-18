@@ -29,5 +29,173 @@
       "time": "08:00",
       "dayOfWeek": 1
     }
+  },
+  "adams_beverages": {
+    "ip": "172.28.79.20",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "apotek": {
+    "ip": "192.168.234.10",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "casey": {
+    "ip": "172.28.108.15",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "coupang_inc14": {
+    "ip": "172.26.119.205",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "dbschenker": {
+    "ip": "10.206.150.12",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "dhl_figs": {
+    "ip": "172.28.62.168",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "dillards": {
+    "ip": "10.8.1.244",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "elcolumbus": {
+    "ip": "172.28.101.11",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "essilor_luxottica_fhr": {
+    "ip": "172.28.76.138",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "essilor_luxottica_sedico": {
+    "ip": "10.13.10.142",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "evergreen": {
+    "ip": "172.28.34.24",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "gxo_eddiebauer": {
+    "ip": "10.218.1.144",
+    "port": 8088,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "ikea": {
+    "ip": "172.28.57.15",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "kellanova_rialto": {
+    "ip": "172.28.98.47",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "kenco_kansas": {
+    "ip": "172.28.80.97",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "kenco_phoenix": {
+    "ip": "172.28.80.20",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "lakeside": {
+    "ip": "172.28.95.15",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "mercado_libre": {
+    "ip": "172.28.96.14",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "robinson": {
+    "ip": "10.21.2.16",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "ryder_whiplash": {
+    "ip": "172.28.59.14",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "sams_atl": {
+    "ip": "172.28.48.13",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "sodimac_columbia": {
+    "ip": "172.28.66.10",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "sodimac_sbs": {
+    "ip": "10.98.27.141",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "stryker": {
+    "ip": "172.28.68.177",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "walmart_canada": {
+    "ip": "172.28.2.13",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "walmart_mexico": {
+    "ip": "172.28.40.11",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "wayfair": {
+    "ip": "172.28.91.19",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
+  },
+  "ykk": {
+    "ip": "172.28.55.26",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details"
   }
 }
