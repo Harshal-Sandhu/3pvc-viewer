@@ -560,3 +560,18 @@ kbd {
     from { transform: translateX(20px); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
 }
+
+.ops-output {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    background: #0f1218;
+    color: #e6e6e6;
+    padding: 0.75rem 0.9rem;
+    border-radius: 6px;
+    margin: 0.5rem 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 24rem;
+    overflow: auto;
+}

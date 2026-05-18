@@ -33,6 +33,9 @@ const els = {
     siteAlertTime: $('#site-alert-time'),
     siteAlertDow: $('#site-alert-dow'),
     siteAlertDowWrap: $('#site-alert-dow-wrap'),
+    siteButlerIp: $('#site-butler-ip'),
+    siteTargetIp: $('#site-target-ip'),
+    siteGorPassword: $('#site-gor-password'),
     siteSave: $('#site-save'),
     siteCancel: $('#site-cancel'),
     siteError: $('#site-error'),
@@ -312,6 +315,10 @@ function openSiteModal(site) {
         els.siteAlertFrequency.value = sched.frequency || 'daily';
         els.siteAlertTime.value = sched.time || '08:00';
         els.siteAlertDow.value = String(sched.dayOfWeek != null ? sched.dayOfWeek : 1);
+        els.siteButlerIp.value = site.butlerIp || '';
+        els.siteTargetIp.value = site.targetIp || '';
+        els.siteGorPassword.value = '';
+        els.siteGorPassword.placeholder = site.hasGorPassword ? 'Leave blank to keep existing password' : 'Set a password';
     } else {
         els.siteModalTitle.textContent = 'Add site';
         els.siteOriginalName.value = '';
@@ -327,6 +334,10 @@ function openSiteModal(site) {
         els.siteAlertFrequency.value = 'daily';
         els.siteAlertTime.value = '08:00';
         els.siteAlertDow.value = '1';
+        els.siteButlerIp.value = '';
+        els.siteTargetIp.value = '';
+        els.siteGorPassword.value = '';
+        els.siteGorPassword.placeholder = 'Set a password';
     }
     els.siteAlertDowWrap.hidden = els.siteAlertFrequency.value !== 'weekly';
     els.siteModal.hidden = false;
@@ -355,8 +366,12 @@ async function onSiteSave(e) {
             frequency: els.siteAlertFrequency.value,
             time: els.siteAlertTime.value,
             dayOfWeek: Number(els.siteAlertDow.value)
-        }
+        },
+        butlerIp: els.siteButlerIp.value.trim(),
+        targetIp: els.siteTargetIp.value.trim()
     };
+    const gorPwd = els.siteGorPassword.value;
+    if (gorPwd) payload.gorPassword = gorPwd;
     try {
         els.siteSave.disabled = true;
         if (editing) {

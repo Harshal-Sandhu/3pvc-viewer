@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
+const { runOnSiteServer } = require('./lib/sshChain');
 
 const {
     HOST = '127.0.0.1',
@@ -188,7 +189,10 @@ function siteToPublic(name, s) {
         complianceMeasurement: s.complianceMeasurement || 'compliance_details',
         releasedVdaVersion: s.releasedVdaVersion || '',
         recipients: Array.isArray(s.recipients) ? s.recipients : [],
-        alertSchedule: normalizeSchedule(s.alertSchedule)
+        alertSchedule: normalizeSchedule(s.alertSchedule),
+        butlerIp: s.butlerIp || '',
+        targetIp: s.targetIp || '',
+        hasGorPassword: !!s.gorPassword
     };
 }
 
@@ -285,6 +289,15 @@ function validateSiteFields(body, { allowName = false } = {}) {
         const r = validateAlertSchedule(body.alertSchedule);
         if (!r.ok) errors.push(r.error);
     }
+    if (body.butlerIp != null && body.butlerIp !== '') {
+        if (typeof body.butlerIp !== 'string' || !/^[a-zA-Z0-9.\-]{1,253}$/.test(body.butlerIp)) errors.push('butlerIp must be a valid hostname or IPv4');
+    }
+    if (body.targetIp != null && body.targetIp !== '') {
+        if (typeof body.targetIp !== 'string' || !/^[a-zA-Z0-9.\-]{1,253}$/.test(body.targetIp)) errors.push('targetIp must be a valid hostname or IPv4');
+    }
+    if (body.gorPassword != null && body.gorPassword !== '') {
+        if (typeof body.gorPassword !== 'string' || body.gorPassword.length > 256) errors.push('gorPassword must be a string up to 256 chars');
+    }
     return errors;
 }
 
@@ -311,7 +324,10 @@ app.post('/api/sites', requireAdmin, (req, res) => {
         complianceMeasurement: body.complianceMeasurement || 'compliance_details',
         releasedVdaVersion: (body.releasedVdaVersion || '').trim(),
         recipients: recipientsCheck.value,
-        alertSchedule: scheduleCheck.value || normalizeSchedule()
+        alertSchedule: scheduleCheck.value || normalizeSchedule(),
+        butlerIp: (body.butlerIp || '').trim(),
+        targetIp: (body.targetIp || '').trim(),
+        gorPassword: (body.gorPassword || '').trim()
     };
     try {
         saveSites();
@@ -347,6 +363,9 @@ app.put('/api/sites/:name', requireAdmin, (req, res) => {
         if (!r.ok) return res.status(400).json({ error: r.error });
         s.alertSchedule = r.value;
     }
+    if (body.butlerIp != null) s.butlerIp = body.butlerIp.trim();
+    if (body.targetIp != null) s.targetIp = body.targetIp.trim();
+    if (body.gorPassword != null && body.gorPassword !== '') s.gorPassword = body.gorPassword.trim();
 
     try {
         saveSites();
@@ -470,6 +489,52 @@ app.get('/api/query', requireAuth, async (req, res) => {
         res.status(502).json({ error: msg });
     } finally {
         clearTimeout(timer);
+    }
+});
+
+const OPS_AUDIT_PATH = path.join(__dirname, 'ops-audit.log');
+function appendOpsAudit(user, siteName, command, outcome) {
+    const line = [new Date().toISOString(), user || '-', siteName, command, outcome].join('\t') + '\n';
+    fs.appendFile(OPS_AUDIT_PATH, line, err => {
+        if (err) console.error('Audit log write failed:', err.message);
+    });
+}
+
+const opsRunning = new Set();
+
+app.post('/api/operations/run-alias', requireAuth, async (req, res) => {
+    const siteName = req.body && req.body.site;
+    if (typeof siteName !== 'string' || !sites[siteName]) {
+        return res.status(400).json({ error: 'Unknown site' });
+    }
+    const s = sites[siteName];
+    if (!s.butlerIp || !s.targetIp || !s.gorPassword) {
+        return res.status(400).json({ error: 'Site is not configured for operations: set Butler IP, Target IP, and gor password in the admin UI.' });
+    }
+    const lockKey = `${req.session.user}:${siteName}`;
+    if (opsRunning.has(lockKey)) {
+        return res.status(429).json({ error: 'A run is already in progress for this site under your session.' });
+    }
+    opsRunning.add(lockKey);
+    try {
+        const result = await runOnSiteServer({
+            command: 'alias',
+            butlerIp: s.butlerIp,
+            targetIp: s.targetIp,
+            gorPassword: s.gorPassword
+        });
+        appendOpsAudit(req.session.user, siteName, 'alias', `exit=${result.code}`);
+        res.json({
+            ok: true,
+            code: result.code,
+            stdout: result.stdout.slice(0, 64 * 1024),
+            stderr: result.stderr.slice(0, 64 * 1024)
+        });
+    } catch (err) {
+        appendOpsAudit(req.session.user, siteName, 'alias', `error: ${err.message}`);
+        res.status(502).json({ error: err.message });
+    } finally {
+        opsRunning.delete(lockKey);
     }
 });
 

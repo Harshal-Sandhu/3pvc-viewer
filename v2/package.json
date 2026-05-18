@@ -20,6 +20,7 @@
     "express": "^4.19.2",
     "express-session": "^1.18.0",
     "node-cron": "^4.2.1",
-    "nodemailer": "^8.0.7"
+    "nodemailer": "^8.0.7",
+    "ssh2": "^1.17.0"
   }
 }

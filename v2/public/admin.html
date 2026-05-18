@@ -152,6 +152,22 @@
                         <option value="0">Sunday</option>
                     </select>
                 </label>
+                <label class="form-grid-wide" style="margin-top:0.5rem;">
+                    <strong>Operations SSH chain</strong>
+                    <span class="hint">Used by the "Run alias" button in the Operation tab. Leave all three blank to disable the button for this site.</span>
+                </label>
+                <label>Butler server IP
+                    <input type="text" id="site-butler-ip" placeholder="e.g. 10.218.1.138">
+                    <span class="hint">Reached from the jumper using the harshal.s key.</span>
+                </label>
+                <label>Target server IP
+                    <input type="text" id="site-target-ip" placeholder="e.g. 10.218.1.140">
+                    <span class="hint">Final hop, reached from the butler as <code>gor@</code>.</span>
+                </label>
+                <label>gor password
+                    <input type="password" id="site-gor-password" placeholder="Leave blank to keep existing" autocomplete="new-password">
+                    <span class="hint">Stored server-side in <code>sites.json</code>. Never returned by the API. Blank on edit = keep existing.</span>
+                </label>
             </div>
             <div class="form-actions">
                 <button type="submit" id="site-save">Save</button>

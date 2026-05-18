@@ -35,6 +35,10 @@ const els = {
     exportBtn: $('#export-btn'),
     querySummary: $('#query-summary'),
 
+    runAliasBtn: $('#run-alias-btn'),
+    opsHint: $('#site-ops-hint'),
+    opsOutput: $('#site-ops-output'),
+
     head: $('#data-head'),
     body: $('#data-body'),
     empty: $('#empty-state'),
@@ -233,6 +237,7 @@ function wireEvents() {
 
     els.load.addEventListener('click', () => loadRows());
     els.exportBtn.addEventListener('click', onExport);
+    els.runAliasBtn.addEventListener('click', onRunAlias);
 
     els.fieldsMenuBtn.addEventListener('click', toggleFieldsMenu);
     els.colMenuBtn.addEventListener('click', toggleColMenu);
@@ -312,9 +317,52 @@ async function onSiteChange() {
         resetBotSelect('Select site first…');
         els.fieldsMenuBtn.disabled = true;
         updateLoadButton();
+        updateOpsCard();
         return;
     }
     await applySiteSelection(next);
+}
+
+function updateOpsCard() {
+    const site = state.selectedSite;
+    const configured = !!(site && site.butlerIp && site.targetIp && site.hasGorPassword);
+    els.runAliasBtn.disabled = !configured;
+    if (!site) {
+        els.opsHint.textContent = 'Select a site that has SSH details configured in admin.';
+    } else if (!configured) {
+        els.opsHint.textContent = `${site.name} has no SSH chain configured. Ask an admin to set Butler IP, Target IP, and gor password.`;
+    } else {
+        els.opsHint.textContent = `Will SSH via jumper → ${site.butlerIp} → gor@${site.targetIp} and run \`alias\`.`;
+    }
+    els.opsOutput.hidden = true;
+    els.opsOutput.textContent = '';
+}
+
+async function onRunAlias() {
+    if (!state.selectedSite) return;
+    const site = state.selectedSite;
+    els.runAliasBtn.disabled = true;
+    const originalLabel = els.runAliasBtn.textContent;
+    els.runAliasBtn.textContent = 'Running…';
+    els.opsOutput.hidden = false;
+    els.opsOutput.textContent = 'Running on ' + site.name + '…';
+    try {
+        const r = await api('/api/operations/run-alias', {
+            method: 'POST',
+            body: JSON.stringify({ site: site.name })
+        });
+        const lines = [];
+        lines.push(`exit code: ${r.code}`);
+        if (r.stdout) lines.push('--- stdout ---', r.stdout);
+        if (r.stderr) lines.push('--- stderr ---', r.stderr);
+        if (!r.stdout && !r.stderr) lines.push('(no output)');
+        els.opsOutput.textContent = lines.join('\n');
+    } catch (err) {
+        els.opsOutput.textContent = 'Error: ' + err.message;
+    } finally {
+        els.runAliasBtn.disabled = false;
+        els.runAliasBtn.textContent = originalLabel;
+    }
 }
 
 async function applySiteSelection(site) {
@@ -340,6 +388,7 @@ async function applySiteSelection(site) {
     els.fieldsMenuBtn.disabled = fields.length === 0;
     updateLoadButton();
     updateSummary();
+    updateOpsCard();
 }
 
 function resetBotSelect(placeholder) {

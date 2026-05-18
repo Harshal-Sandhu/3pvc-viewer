@@ -81,6 +81,15 @@
             <button id="export-btn" type="button" class="btn-subtle" disabled>Export CSV</button>
         </section>
 
+        <section class="card" id="site-ops-card">
+            <div class="card-head">
+                <h2 class="card-title">Site server operations</h2>
+                <button id="run-alias-btn" type="button" class="btn-subtle" disabled>Run alias</button>
+            </div>
+            <p id="site-ops-hint" class="muted small" style="margin:0 0 0.5rem;">Select a site that has SSH details configured in admin.</p>
+            <pre id="site-ops-output" class="ops-output" hidden></pre>
+        </section>
+
         <section class="card">
             <div class="table-toolbar">
                 <span id="query-summary" class="muted small">Select a site and a bot to load rows.</span>
