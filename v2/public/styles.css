@@ -575,3 +575,43 @@ kbd {
     max-height: 24rem;
     overflow: auto;
 }
+
+.vda-ips-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 0.25rem 0.75rem;
+    margin-top: 0.5rem;
+    max-height: 18rem;
+    overflow: auto;
+    padding: 0.5rem;
+    border: 1px solid var(--border, #d0d4dc);
+    border-radius: 4px;
+}
+.vda-ip-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+    margin: 0;
+}
+.vda-ip-row.vda-ip-currently-active span {
+    color: var(--ok, #2e7d32);
+}
+body.ops-busy .controls,
+body.ops-busy #site-ops-card,
+body.ops-busy #vda-deploy-card #vda-form,
+body.ops-busy #vda-deploy-card .card-head {
+    opacity: 0.55;
+}
+body.ops-busy #vda-deploy-status {
+    opacity: 1;
+    font-weight: 600;
+}
+.btn-danger {
+    background: #c0392b;
+    color: #fff;
+}
+.btn-danger:disabled {
+    background: #c0392b88;
+}

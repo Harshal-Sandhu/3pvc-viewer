@@ -84,10 +84,60 @@
         <section class="card" id="site-ops-card">
             <div class="card-head">
                 <h2 class="card-title">Site server operations</h2>
-                <button id="run-alias-btn" type="button" class="btn-subtle" disabled>Run alias</button>
+                <div>
+                    <button id="ping-bot-btn" type="button" class="btn-subtle" disabled>Ping bot</button>
+                    <button id="run-alias-btn" type="button" class="btn-subtle" disabled>Run alias</button>
+                </div>
             </div>
             <p id="site-ops-hint" class="muted small" style="margin:0 0 0.5rem;">Select a site that has SSH details configured in admin.</p>
             <pre id="site-ops-output" class="ops-output" hidden></pre>
+        </section>
+
+        <section class="card" id="vda-deploy-card">
+            <div class="card-head">
+                <h2 class="card-title">Deploy VDA to bots</h2>
+                <button id="vda-load-inventory" type="button" class="btn-subtle btn-small" disabled>Load bot inventory</button>
+            </div>
+            <p class="muted small" style="margin:0 0 0.75rem;">
+                Uploads a VDA tarball to <code>/home/gor/vda_remote_build/</code>, patches
+                <code>group_vars/vda_remote</code> and <code>_vda_remote</code>, and runs
+                <code>vda_deploy.sh</code> on the target server.
+            </p>
+            <p id="vda-hint" class="muted small" style="margin:0 0 0.75rem;">Select a configured site first.</p>
+            <div id="vda-form" hidden>
+                <div class="form-grid">
+                    <label>VDA tar file (.tar / .tar.gz / .tgz, &lt;100 MB)
+                        <input type="file" id="vda-file" accept=".tar,.gz,.tgz,application/gzip,application/x-tar">
+                        <span class="hint" id="vda-file-hint">No file selected.</span>
+                    </label>
+                    <label>venv_version
+                        <input type="text" id="vda-venv-version" placeholder="e.g. 3.15.8">
+                        <span class="hint">Auto-filled from filename when you select a tar.</span>
+                    </label>
+                    <label>emqx_mqtt_host
+                        <input type="text" id="vda-emqx-host" placeholder="e.g. 192.168.234.213">
+                    </label>
+                    <label>Bot section
+                        <select id="vda-bot-section" disabled>
+                            <option value="">Load inventory first…</option>
+                        </select>
+                        <span class="hint">Section in <code>_vda_remote</code> the IPs will be written under.</span>
+                    </label>
+                </div>
+                <div id="vda-ips-wrap" style="margin-top:0.75rem;" hidden>
+                    <div class="table-toolbar" style="padding:0;">
+                        <strong style="margin-right:auto;">Bots in this section</strong>
+                        <button type="button" id="vda-ips-all" class="btn-subtle btn-small">Select all</button>
+                        <button type="button" id="vda-ips-none" class="btn-subtle btn-small">Select none</button>
+                    </div>
+                    <div id="vda-ips-list" class="vda-ips-list"></div>
+                </div>
+                <div class="form-actions" style="margin-top:0.75rem;">
+                    <button type="button" id="vda-deploy-btn" class="btn-danger" disabled>Deploy VDA</button>
+                    <span id="vda-deploy-status" class="muted small"></span>
+                </div>
+            </div>
+            <pre id="vda-output" class="ops-output" hidden></pre>
         </section>
 
         <section class="card">

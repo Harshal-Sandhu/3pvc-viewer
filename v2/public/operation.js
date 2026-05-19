@@ -36,8 +36,26 @@ const els = {
     querySummary: $('#query-summary'),
 
     runAliasBtn: $('#run-alias-btn'),
+    pingBotBtn: $('#ping-bot-btn'),
     opsHint: $('#site-ops-hint'),
     opsOutput: $('#site-ops-output'),
+
+    vdaCard: $('#vda-deploy-card'),
+    vdaLoadBtn: $('#vda-load-inventory'),
+    vdaHint: $('#vda-hint'),
+    vdaForm: $('#vda-form'),
+    vdaFile: $('#vda-file'),
+    vdaFileHint: $('#vda-file-hint'),
+    vdaVenvVersion: $('#vda-venv-version'),
+    vdaEmqxHost: $('#vda-emqx-host'),
+    vdaBotSection: $('#vda-bot-section'),
+    vdaIpsWrap: $('#vda-ips-wrap'),
+    vdaIpsList: $('#vda-ips-list'),
+    vdaIpsAll: $('#vda-ips-all'),
+    vdaIpsNone: $('#vda-ips-none'),
+    vdaDeployBtn: $('#vda-deploy-btn'),
+    vdaDeployStatus: $('#vda-deploy-status'),
+    vdaOutput: $('#vda-output'),
 
     head: $('#data-head'),
     body: $('#data-body'),
@@ -80,7 +98,8 @@ const state = {
     selectedBot: null,
     availableFields: [],       // every field/tag name discoverable from the measurement
     columns: [],               // columns returned by the last query
-    rows: []                   // rows returned by the last query
+    rows: [],                  // rows returned by the last query
+    vdaSections: null          // { section_name: [{ip, active}, ...] } or null
 };
 
 // ---------------------------------------------------------------------------
@@ -185,6 +204,7 @@ function wireEvents() {
         savePrefs();
         updateLoadButton();
         updateSummary();
+        updateOpsCard();
     });
 
     els.lookback.addEventListener('change', () => {
@@ -238,6 +258,16 @@ function wireEvents() {
     els.load.addEventListener('click', () => loadRows());
     els.exportBtn.addEventListener('click', onExport);
     els.runAliasBtn.addEventListener('click', onRunAlias);
+    els.pingBotBtn.addEventListener('click', onPingBot);
+
+    els.vdaLoadBtn.addEventListener('click', onVdaLoadInventory);
+    els.vdaFile.addEventListener('change', onVdaFileChange);
+    els.vdaVenvVersion.addEventListener('input', updateVdaDeployButton);
+    els.vdaEmqxHost.addEventListener('input', updateVdaDeployButton);
+    els.vdaBotSection.addEventListener('change', onVdaSectionChange);
+    els.vdaIpsAll.addEventListener('click', () => setAllIpCheckboxes(true));
+    els.vdaIpsNone.addEventListener('click', () => setAllIpCheckboxes(false));
+    els.vdaDeployBtn.addEventListener('click', onVdaDeploy);
 
     els.fieldsMenuBtn.addEventListener('click', toggleFieldsMenu);
     els.colMenuBtn.addEventListener('click', toggleColMenu);
@@ -326,16 +356,257 @@ async function onSiteChange() {
 function updateOpsCard() {
     const site = state.selectedSite;
     const configured = !!(site && site.butlerIp && site.targetIp && site.hasGorPassword);
+    const botSelected = !!state.selectedBot;
     els.runAliasBtn.disabled = !configured;
+    els.pingBotBtn.disabled = !(configured && botSelected);
     if (!site) {
         els.opsHint.textContent = 'Select a site that has SSH details configured in admin.';
     } else if (!configured) {
         els.opsHint.textContent = `${site.name} has no SSH chain configured. Ask an admin to set Butler IP, Target IP, and gor password.`;
+    } else if (!botSelected) {
+        els.opsHint.textContent = `SSH chain ready. Pick a bot above to enable "Ping bot".`;
     } else {
-        els.opsHint.textContent = `Will SSH via jumper → ${site.butlerIp} → gor@${site.targetIp} and run \`alias\`.`;
+        els.opsHint.textContent = `Will SSH via jumper → ${site.butlerIp} → gor@${site.targetIp}.`;
     }
-    els.opsOutput.hidden = true;
-    els.opsOutput.textContent = '';
+    updateVdaCard();
+}
+
+function updateVdaCard() {
+    const site = state.selectedSite;
+    const configured = !!(site && site.butlerIp && site.targetIp && site.hasGorPassword);
+    els.vdaLoadBtn.disabled = !configured;
+    if (!configured) {
+        els.vdaHint.textContent = 'Select a configured site first.';
+        els.vdaForm.hidden = true;
+        state.vdaSections = null;
+    } else if (!state.vdaSections) {
+        els.vdaHint.textContent = 'Click "Load bot inventory" to fetch the current _vda_remote from the target.';
+        els.vdaForm.hidden = true;
+    } else {
+        els.vdaHint.textContent = '';
+        els.vdaForm.hidden = false;
+    }
+}
+
+async function onVdaLoadInventory() {
+    if (!state.selectedSite) return;
+    const site = state.selectedSite;
+    els.vdaLoadBtn.disabled = true;
+    const originalLabel = els.vdaLoadBtn.textContent;
+    els.vdaLoadBtn.textContent = 'Loading…';
+    try {
+        const r = await api(`/api/operations/vda/inventory?site=${encodeURIComponent(site.name)}`);
+        state.vdaSections = r.sections || {};
+        populateBotSectionSelect();
+        updateVdaCard();
+    } catch (err) {
+        els.vdaHint.textContent = 'Failed to load inventory: ' + err.message;
+        state.vdaSections = null;
+    } finally {
+        els.vdaLoadBtn.disabled = false;
+        els.vdaLoadBtn.textContent = originalLabel;
+    }
+}
+
+function populateBotSectionSelect() {
+    els.vdaBotSection.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Choose a section…';
+    els.vdaBotSection.append(placeholder);
+    const sections = Object.keys(state.vdaSections || {}).sort();
+    for (const name of sections) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        const ips = state.vdaSections[name] || [];
+        const activeCount = ips.filter(x => x.active).length;
+        opt.textContent = `${name}  (${ips.length} bots, ${activeCount} active)`;
+        els.vdaBotSection.append(opt);
+    }
+    els.vdaBotSection.disabled = sections.length === 0;
+    els.vdaBotSection.value = '';
+    renderIpCheckboxes(null);
+}
+
+function onVdaSectionChange() {
+    renderIpCheckboxes(els.vdaBotSection.value || null);
+    updateVdaDeployButton();
+}
+
+function renderIpCheckboxes(sectionName) {
+    els.vdaIpsList.replaceChildren();
+    if (!sectionName || !state.vdaSections || !state.vdaSections[sectionName]) {
+        els.vdaIpsWrap.hidden = true;
+        return;
+    }
+    const ips = state.vdaSections[sectionName];
+    if (ips.length === 0) {
+        els.vdaIpsWrap.hidden = false;
+        const note = document.createElement('p');
+        note.className = 'muted small';
+        note.textContent = 'No bots listed in this section yet.';
+        els.vdaIpsList.append(note);
+        return;
+    }
+    els.vdaIpsWrap.hidden = false;
+    for (const { ip, active } of ips) {
+        const label = document.createElement('label');
+        label.className = 'vda-ip-row';
+        if (active) label.classList.add('vda-ip-currently-active');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = ip;
+        cb.checked = false;
+        cb.addEventListener('change', updateVdaDeployButton);
+        const span = document.createElement('span');
+        span.textContent = ip + (active ? ' • currently active' : '');
+        label.append(cb, span);
+        els.vdaIpsList.append(label);
+    }
+}
+
+function setAllIpCheckboxes(checked) {
+    els.vdaIpsList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = checked; });
+    updateVdaDeployButton();
+}
+
+function collectActiveIps() {
+    return Array.from(els.vdaIpsList.querySelectorAll('input[type=checkbox]:checked')).map(cb => cb.value);
+}
+
+function onVdaFileChange() {
+    const file = els.vdaFile.files && els.vdaFile.files[0];
+    if (!file) {
+        els.vdaFileHint.textContent = 'No file selected.';
+        updateVdaDeployButton();
+        return;
+    }
+    els.vdaFileHint.textContent = `${file.name} (${formatBytes(file.size)})`;
+    const m = file.name.match(/_v([0-9]+(?:\.[0-9]+){0,3})_/);
+    if (m && !els.vdaVenvVersion.value) els.vdaVenvVersion.value = m[1];
+    updateVdaDeployButton();
+}
+
+function formatBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+function updateVdaDeployButton() {
+    const file = els.vdaFile.files && els.vdaFile.files[0];
+    const venv = els.vdaVenvVersion.value.trim();
+    const emqx = els.vdaEmqxHost.value.trim();
+    const section = els.vdaBotSection.value;
+    els.vdaDeployBtn.disabled = !(file && venv && emqx && section);
+}
+
+function setOpsBusy(busy) {
+    state.opsBusy = busy;
+    document.body.classList.toggle('ops-busy', busy);
+    const controls = [
+        els.site, els.bot, els.lookback, els.lookbackCustom, els.rowLimit, els.rowLimitCustom,
+        els.fieldsMenuBtn, els.colMenuBtn, els.load, els.exportBtn,
+        els.runAliasBtn, els.pingBotBtn,
+        els.vdaLoadBtn, els.vdaFile, els.vdaVenvVersion, els.vdaEmqxHost,
+        els.vdaBotSection, els.vdaIpsAll, els.vdaIpsNone, els.vdaDeployBtn
+    ];
+    if (busy) {
+        controls.forEach(el => { if (el) el.disabled = true; });
+        els.vdaIpsList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.disabled = true; });
+    } else {
+        els.vdaIpsList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.disabled = false; });
+        if (els.site) els.site.disabled = false;
+        if (els.bot) els.bot.disabled = !(state.bots && state.bots.length);
+        if (els.lookback) els.lookback.disabled = false;
+        if (els.lookbackCustom) els.lookbackCustom.disabled = false;
+        if (els.rowLimit) els.rowLimit.disabled = false;
+        if (els.rowLimitCustom) els.rowLimitCustom.disabled = false;
+        if (els.fieldsMenuBtn) els.fieldsMenuBtn.disabled = !state.availableFields.length;
+        if (els.colMenuBtn) els.colMenuBtn.disabled = !state.columns.length;
+        if (els.vdaFile) els.vdaFile.disabled = false;
+        if (els.vdaVenvVersion) els.vdaVenvVersion.disabled = false;
+        if (els.vdaEmqxHost) els.vdaEmqxHost.disabled = false;
+        if (els.vdaBotSection) els.vdaBotSection.disabled = !state.vdaSections;
+        if (els.vdaIpsAll) els.vdaIpsAll.disabled = false;
+        if (els.vdaIpsNone) els.vdaIpsNone.disabled = false;
+        updateLoadButton();
+        updateOpsCard();
+        updateVdaDeployButton();
+    }
+}
+
+async function onVdaDeploy() {
+    const site = state.selectedSite;
+    if (!site) return;
+    const file = els.vdaFile.files && els.vdaFile.files[0];
+    if (!file) return;
+    if (file.size > 100 * 1024 * 1024) {
+        els.vdaOutput.hidden = false;
+        els.vdaOutput.textContent = 'File too large (limit 100 MB).';
+        return;
+    }
+    const venv = els.vdaVenvVersion.value.trim();
+    const emqx = els.vdaEmqxHost.value.trim();
+    const section = els.vdaBotSection.value;
+    const activeIps = collectActiveIps();
+    const confirmed = window.confirm(
+        `Deploy ${file.name} to ${site.name}?\n\n`
+        + `Section: ${section}\n`
+        + `Active bots: ${activeIps.length}\n`
+        + `venv_version: ${venv}\n`
+        + `emqx_mqtt_host: ${emqx}\n\n`
+        + `This runs bash vda_deploy.sh on the target and may take several minutes.\n`
+        + `All other operations will be disabled while it runs.`
+    );
+    if (!confirmed) return;
+
+    const fd = new FormData();
+    fd.append('site', site.name);
+    fd.append('venvVersion', venv);
+    fd.append('emqxMqttHost', emqx);
+    fd.append('botSection', section);
+    fd.append('activeIps', JSON.stringify(activeIps));
+    fd.append('tar', file);
+
+    setOpsBusy(true);
+    const startedAt = Date.now();
+    const tick = setInterval(() => {
+        const secs = Math.floor((Date.now() - startedAt) / 1000);
+        const mm = String(Math.floor(secs / 60)).padStart(2, '0');
+        const ss = String(secs % 60).padStart(2, '0');
+        els.vdaDeployStatus.textContent = `Deploying — elapsed ${mm}:${ss}. All other ops disabled.`;
+    }, 1000);
+    els.vdaOutput.hidden = false;
+    els.vdaOutput.textContent = 'Uploading tar and patching inventory…';
+    try {
+        const res = await fetch('/api/operations/vda/deploy', {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: fd
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            const stepsTxt = body.steps ? '\n\n--- steps completed ---\n' + body.steps.map(s => `${s.at}  ${s.label}`).join('\n') : '';
+            els.vdaOutput.textContent = `Error: ${body.error || res.statusText}${stepsTxt}`;
+            return;
+        }
+        const lines = [];
+        if (body.steps) {
+            lines.push('--- steps ---');
+            for (const s of body.steps) lines.push(`${s.at}  ${s.label}${s.code != null ? ` (exit ${s.code})` : ''}`);
+        }
+        lines.push('', `vda_deploy.sh exit code: ${body.code}`);
+        if (body.stdout) lines.push('--- stdout ---', body.stdout);
+        if (body.stderr) lines.push('--- stderr ---', body.stderr);
+        els.vdaOutput.textContent = lines.join('\n');
+    } catch (err) {
+        els.vdaOutput.textContent = 'Error: ' + err.message;
+    } finally {
+        clearInterval(tick);
+        els.vdaDeployStatus.textContent = '';
+        setOpsBusy(false);
+    }
 }
 
 async function onRunAlias() {
@@ -362,6 +633,35 @@ async function onRunAlias() {
     } finally {
         els.runAliasBtn.disabled = false;
         els.runAliasBtn.textContent = originalLabel;
+    }
+}
+
+async function onPingBot() {
+    if (!state.selectedSite || !state.selectedBot) return;
+    const site = state.selectedSite;
+    const botId = state.selectedBot;
+    els.pingBotBtn.disabled = true;
+    const originalLabel = els.pingBotBtn.textContent;
+    els.pingBotBtn.textContent = 'Pinging…';
+    els.opsOutput.hidden = false;
+    els.opsOutput.textContent = `Looking up IP for bot ${botId}…`;
+    try {
+        const r = await api('/api/operations/ping-bot', {
+            method: 'POST',
+            body: JSON.stringify({ site: site.name, botId })
+        });
+        const lines = [];
+        lines.push(`target: ${botId} (${r.botIp})`);
+        lines.push(`exit code: ${r.code}`);
+        if (r.stdout) lines.push('--- stdout ---', r.stdout);
+        if (r.stderr) lines.push('--- stderr ---', r.stderr);
+        if (!r.stdout && !r.stderr) lines.push('(no output)');
+        els.opsOutput.textContent = lines.join('\n');
+    } catch (err) {
+        els.opsOutput.textContent = 'Error: ' + err.message;
+    } finally {
+        els.pingBotBtn.disabled = false;
+        els.pingBotBtn.textContent = originalLabel;
     }
 }
 

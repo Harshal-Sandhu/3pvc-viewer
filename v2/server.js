@@ -6,7 +6,11 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
-const { runOnSiteServer } = require('./lib/sshChain');
+const { runOnSiteServer, readRemoteFile, writeRemoteFile } = require('./lib/sshChain');
+const { parseInventory, applyActiveIps, updateGroupVars } = require('./lib/vdaInventory');
+const multer = require('multer');
+const os = require('os');
+const crypto = require('crypto');
 
 const {
     HOST = '127.0.0.1',
@@ -502,6 +506,251 @@ function appendOpsAudit(user, siteName, command, outcome) {
 
 const opsRunning = new Set();
 
+const VDA_REMOTE_BUILD_DIR = '/home/gor/vda_remote_build';
+const VDA_GROUP_VARS_PATH = '/opt/ranger_deployer/inventory/group_vars/vda_remote';
+const VDA_INVENTORY_PATH = '/opt/ranger_deployer/inventory/vda_remote';
+const VDA_DEPLOY_DIR = '/opt/ranger_deployer';
+const VDA_DEPLOY_TIMEOUT_MS = 30 * 60 * 1000;
+
+const vdaUpload = multer({
+    storage: multer.diskStorage({
+        destination: os.tmpdir(),
+        filename: (req, file, cb) => {
+            const rand = crypto.randomBytes(8).toString('hex');
+            const safeName = file.originalname.replace(/[^a-zA-Z0-9._\-]/g, '_').slice(0, 200);
+            cb(null, `vda-${rand}-${safeName}`);
+        }
+    }),
+    limits: { fileSize: 100 * 1024 * 1024, files: 1 }
+});
+
+function siteOpsConfig(siteName) {
+    const s = sites[siteName];
+    if (!s) return { error: 'Unknown site' };
+    if (!s.butlerIp || !s.targetIp || !s.gorPassword) {
+        return { error: 'Site is not configured for operations: set Butler IP, Target IP, and gor password in the admin UI.' };
+    }
+    return { ok: true, opts: { butlerIp: s.butlerIp, targetIp: s.targetIp, gorPassword: s.gorPassword } };
+}
+
+app.get('/api/operations/vda/inventory', requireAuth, async (req, res) => {
+    const siteName = req.query && req.query.site;
+    console.error('[ops]', new Date().toISOString(), 'GET /api/operations/vda/inventory', { user: req.session.user, site: siteName });
+    const cfg = siteOpsConfig(siteName);
+    if (cfg.error) return res.status(400).json({ error: cfg.error });
+    try {
+        const text = await readRemoteFile(cfg.opts, VDA_INVENTORY_PATH);
+        const sections = parseInventory(text);
+        console.error('[ops]', new Date().toISOString(), 'inventory parsed', { sectionCount: Object.keys(sections).length });
+        res.json({ ok: true, sections });
+    } catch (err) {
+        console.error('[ops]', new Date().toISOString(), 'inventory load failed', { error: err.message });
+        res.status(502).json({ error: err.message });
+    }
+});
+
+app.post(
+    '/api/operations/vda/deploy',
+    requireAuth,
+    (req, res, next) => {
+        req.setTimeout(VDA_DEPLOY_TIMEOUT_MS + 60000);
+        res.setTimeout(VDA_DEPLOY_TIMEOUT_MS + 60000);
+        next();
+    },
+    vdaUpload.single('tar'),
+    async (req, res) => {
+        const siteName = req.body && req.body.site;
+        const cfg = siteOpsConfig(siteName);
+        if (cfg.error) {
+            cleanupUpload(req.file);
+            return res.status(400).json({ error: cfg.error });
+        }
+        const tarFile = req.file;
+        if (!tarFile) return res.status(400).json({ error: 'tar file is required' });
+
+        const venvVersion = String(req.body.venvVersion || '').trim();
+        const emqxHost = String(req.body.emqxMqttHost || '').trim();
+        const botSection = String(req.body.botSection || '').trim();
+        let activeIps;
+        try {
+            activeIps = JSON.parse(req.body.activeIps || '[]');
+            if (!Array.isArray(activeIps)) throw new Error();
+        } catch {
+            cleanupUpload(tarFile);
+            return res.status(400).json({ error: 'activeIps must be a JSON array of IPv4 strings' });
+        }
+
+        if (!/^[a-zA-Z0-9._\-]{1,32}$/.test(venvVersion)) {
+            cleanupUpload(tarFile);
+            return res.status(400).json({ error: 'venvVersion must be 1-32 chars of [a-zA-Z0-9._-]' });
+        }
+        if (!/^[a-zA-Z0-9.\-]{1,253}$/.test(emqxHost)) {
+            cleanupUpload(tarFile);
+            return res.status(400).json({ error: 'emqxMqttHost must be a valid hostname or IPv4' });
+        }
+        if (!/^[a-zA-Z0-9_]+_production$/.test(botSection)) {
+            cleanupUpload(tarFile);
+            return res.status(400).json({ error: 'botSection must look like xxx_production' });
+        }
+        for (const ip of activeIps) {
+            if (typeof ip !== 'string' || !/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+                cleanupUpload(tarFile);
+                return res.status(400).json({ error: `Invalid IP in activeIps: ${ip}` });
+            }
+        }
+        if (!/\.(tar|tar\.gz|tgz)$/i.test(tarFile.originalname)) {
+            cleanupUpload(tarFile);
+            return res.status(400).json({ error: 'tar filename must end with .tar, .tar.gz, or .tgz' });
+        }
+        const safeTarName = tarFile.originalname.replace(/[^a-zA-Z0-9._\-]/g, '_').slice(0, 200);
+        const lockKey = `site:${siteName}`;
+        if (opsRunning.has(lockKey)) {
+            cleanupUpload(tarFile);
+            return res.status(429).json({ error: 'Another operation is already in progress for this site.' });
+        }
+        opsRunning.add(lockKey);
+        const steps = [];
+        const addStep = (label, info = {}) => steps.push({ label, at: new Date().toISOString(), ...info });
+        try {
+            addStep('upload-received', { size: tarFile.size, filename: safeTarName });
+
+            addStep('scp-tar-start');
+            const fileStream = fs.createReadStream(tarFile.path);
+            await writeRemoteFile(
+                { ...cfg.opts, useSudo: true, timeoutMs: 15 * 60 * 1000 },
+                `${VDA_REMOTE_BUILD_DIR}/${safeTarName}`,
+                fileStream
+            );
+            addStep('scp-tar-done');
+
+            addStep('patch-group-vars-start');
+            const groupVarsText = await readRemoteFile(cfg.opts, VDA_GROUP_VARS_PATH);
+            const newGroupVars = updateGroupVars(groupVarsText, {
+                venv_version: venvVersion,
+                emqx_mqtt_host: emqxHost
+            });
+            await writeRemoteFile({ ...cfg.opts, useSudo: true }, VDA_GROUP_VARS_PATH, newGroupVars);
+            addStep('patch-group-vars-done');
+
+            addStep('patch-inventory-start');
+            const invText = await readRemoteFile(cfg.opts, VDA_INVENTORY_PATH);
+            const newInv = applyActiveIps(invText, botSection, activeIps);
+            await writeRemoteFile({ ...cfg.opts, useSudo: true }, VDA_INVENTORY_PATH, newInv);
+            addStep('patch-inventory-done');
+
+            addStep('vda-deploy-start');
+            const deployResult = await runOnSiteServer({
+                ...cfg.opts,
+                command: `cd ${VDA_DEPLOY_DIR} && bash vda_deploy.sh`,
+                timeoutMs: VDA_DEPLOY_TIMEOUT_MS
+            });
+            addStep('vda-deploy-done', { code: deployResult.code });
+
+            appendOpsAudit(
+                req.session.user,
+                siteName,
+                `vda-deploy ${safeTarName} ${botSection}(${activeIps.length}ips) venv=${venvVersion}`,
+                `exit=${deployResult.code}`
+            );
+            res.json({
+                ok: true,
+                code: deployResult.code,
+                stdout: deployResult.stdout.slice(0, 256 * 1024),
+                stderr: deployResult.stderr.slice(0, 256 * 1024),
+                steps
+            });
+        } catch (err) {
+            appendOpsAudit(req.session.user, siteName, `vda-deploy ${safeTarName}`, `error: ${err.message}`);
+            res.status(502).json({ error: err.message, steps });
+        } finally {
+            opsRunning.delete(lockKey);
+            cleanupUpload(tarFile);
+        }
+    }
+);
+
+function cleanupUpload(file) {
+    if (!file) return;
+    fs.unlink(file.path, () => { /* ignore */ });
+}
+
+async function fetchBotIp(site, botId) {
+    const escaped = String(botId).replace(/'/g, "");
+    const q = `SELECT * FROM "${site.measurement}" WHERE "bot_id" = '${escaped}' ORDER BY time DESC LIMIT 1`;
+    const url = `http://${site.ip}:${site.port}/query?db=${encodeURIComponent(site.db)}&q=${encodeURIComponent(q)}`;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 10000);
+    try {
+        const r = await fetch(url, { signal: ac.signal });
+        if (!r.ok) throw new Error(`InfluxDB returned ${r.status}`);
+        const j = await r.json();
+        const series = j && j.results && j.results[0] && j.results[0].series && j.results[0].series[0];
+        if (!series || !series.columns || !series.values || !series.values.length) return null;
+        const ipIdx = series.columns.indexOf('ip');
+        if (ipIdx === -1) return null;
+        const ip = series.values[0][ipIdx];
+        return typeof ip === 'string' && ip ? ip : null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+app.post('/api/operations/ping-bot', requireAuth, async (req, res) => {
+    const siteName = req.body && req.body.site;
+    const botId = req.body && req.body.botId;
+    if (typeof siteName !== 'string' || !sites[siteName]) {
+        return res.status(400).json({ error: 'Unknown site' });
+    }
+    if (typeof botId !== 'string' || !/^[a-zA-Z0-9._\-]+$/.test(botId) || botId.length > 64) {
+        return res.status(400).json({ error: 'Invalid botId' });
+    }
+    const s = sites[siteName];
+    if (!s.butlerIp || !s.targetIp || !s.gorPassword) {
+        return res.status(400).json({ error: 'Site is not configured for operations: set Butler IP, Target IP, and gor password in the admin UI.' });
+    }
+    const lockKey = `site:${siteName}`;
+    if (opsRunning.has(lockKey)) {
+        return res.status(429).json({ error: 'Another operation is already in progress for this site.' });
+    }
+    opsRunning.add(lockKey);
+    try {
+        let botIp;
+        try {
+            botIp = await fetchBotIp(s, botId);
+        } catch (err) {
+            appendOpsAudit(req.session.user, siteName, `ping ${botId}`, `influx-error: ${err.message}`);
+            return res.status(502).json({ error: `InfluxDB lookup failed: ${err.message}` });
+        }
+        if (!botIp) {
+            appendOpsAudit(req.session.user, siteName, `ping ${botId}`, 'no-ip-found');
+            return res.status(404).json({ error: `No IP recorded in InfluxDB for bot_id "${botId}"` });
+        }
+        if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(botIp)) {
+            appendOpsAudit(req.session.user, siteName, `ping ${botId}`, `invalid-ip: ${botIp}`);
+            return res.status(502).json({ error: `Bot IP in InfluxDB is not a valid IPv4: ${botIp}` });
+        }
+        const result = await runOnSiteServer({
+            command: `ping -c 4 -W 2 ${botIp}`,
+            butlerIp: s.butlerIp,
+            targetIp: s.targetIp,
+            gorPassword: s.gorPassword
+        });
+        appendOpsAudit(req.session.user, siteName, `ping ${botId} (${botIp})`, `exit=${result.code}`);
+        res.json({
+            ok: true,
+            botIp,
+            code: result.code,
+            stdout: result.stdout.slice(0, 64 * 1024),
+            stderr: result.stderr.slice(0, 64 * 1024)
+        });
+    } catch (err) {
+        appendOpsAudit(req.session.user, siteName, `ping ${botId}`, `error: ${err.message}`);
+        res.status(502).json({ error: err.message });
+    } finally {
+        opsRunning.delete(lockKey);
+    }
+});
+
 app.post('/api/operations/run-alias', requireAuth, async (req, res) => {
     const siteName = req.body && req.body.site;
     if (typeof siteName !== 'string' || !sites[siteName]) {
@@ -511,9 +760,9 @@ app.post('/api/operations/run-alias', requireAuth, async (req, res) => {
     if (!s.butlerIp || !s.targetIp || !s.gorPassword) {
         return res.status(400).json({ error: 'Site is not configured for operations: set Butler IP, Target IP, and gor password in the admin UI.' });
     }
-    const lockKey = `${req.session.user}:${siteName}`;
+    const lockKey = `site:${siteName}`;
     if (opsRunning.has(lockKey)) {
-        return res.status(429).json({ error: 'A run is already in progress for this site under your session.' });
+        return res.status(429).json({ error: 'Another operation is already in progress for this site.' });
     }
     opsRunning.add(lockKey);
     try {

@@ -21,20 +21,34 @@
     "releasedVdaVersion": "3.15.8",
     "complianceMeasurement": "compliance_details",
     "recipients": [
-      "harshal.s@greyorange.com"
+      "product_validation@greyorange.com"
     ],
     "alertSchedule": {
       "enabled": false,
       "frequency": "daily",
       "time": "08:00",
       "dayOfWeek": 1
-    }
+    },
+    "butlerIp": "192.168.234.217",
+    "targetIp": "10.95.244.15",
+    "gorPassword": "apj0702"
   },
   "adams_beverages": {
     "ip": "172.28.79.20",
     "port": 8086,
     "db": "GreyOrange",
-    "measurement": "bot_firmware_version_details"
+    "measurement": "bot_firmware_version_details",
+    "complianceMeasurement": "compliance_details",
+    "recipients": [],
+    "alertSchedule": {
+      "enabled": false,
+      "frequency": "daily",
+      "time": "08:00",
+      "dayOfWeek": 1
+    },
+    "butlerIp": "",
+    "targetIp": "",
+    "gorPassword": "apj0702"
   },
   "apotek": {
     "ip": "192.168.234.10",
