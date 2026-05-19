@@ -510,7 +510,7 @@ const VDA_REMOTE_BUILD_DIR = '/home/gor/vda_remote_build';
 const VDA_GROUP_VARS_PATH = '/opt/ranger_deployer/inventory/group_vars/vda_remote';
 const VDA_INVENTORY_PATH = '/opt/ranger_deployer/inventory/vda_remote';
 const VDA_DEPLOY_DIR = '/opt/ranger_deployer';
-const VDA_DEPLOY_TIMEOUT_MS = 30 * 60 * 1000;
+const VDA_DEPLOY_TIMEOUT_MS = 60 * 60 * 1000;
 
 const vdaUpload = multer({
     storage: multer.diskStorage({
