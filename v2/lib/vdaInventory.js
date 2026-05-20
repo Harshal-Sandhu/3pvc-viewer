@@ -112,7 +112,7 @@ function applyActiveIps(text, sectionName, activeIps) {
 }
 
 function updateGroupVars(text, updates) {
-    const allowedKeys = new Set(['venv_version', 'emqx_mqtt_host']);
+    const allowedKeys = new Set(['vda_remote_version', 'emqx_mqtt_host']);
     const lines = String(text || '').split('\n');
     const seen = new Set();
     const out = lines.map(line => {

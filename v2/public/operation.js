@@ -46,7 +46,7 @@ const els = {
     vdaForm: $('#vda-form'),
     vdaFile: $('#vda-file'),
     vdaFileHint: $('#vda-file-hint'),
-    vdaVenvVersion: $('#vda-venv-version'),
+    vdaVersion: $('#vda-vda-version'),
     vdaEmqxHost: $('#vda-emqx-host'),
     vdaBotSection: $('#vda-bot-section'),
     vdaIpsWrap: $('#vda-ips-wrap'),
@@ -284,7 +284,7 @@ function wireEvents() {
 
     els.vdaLoadBtn.addEventListener('click', onVdaLoadInventory);
     els.vdaFile.addEventListener('change', onVdaFileChange);
-    els.vdaVenvVersion.addEventListener('input', updateVdaDeployButton);
+    els.vdaVersion.addEventListener('input', updateVdaDeployButton);
     els.vdaEmqxHost.addEventListener('input', updateVdaDeployButton);
     els.vdaBotSection.addEventListener('change', onVdaSectionChange);
     els.vdaIpsAll.addEventListener('click', () => setAllIpCheckboxes(true));
@@ -550,6 +550,18 @@ function clearAllSelections() {
     updateVdaDeployButton();
 }
 
+// Empty all editable VDA-deploy inputs (file, version, emqx, basket).
+// Called after every deploy attempt regardless of outcome so the next run
+// starts from a clean slate. Loaded inventory (sections, IPs) is preserved.
+function resetVdaForm() {
+    els.vdaFile.value = '';
+    els.vdaVersion.value = '';
+    els.vdaEmqxHost.value = '';
+    els.vdaFileHint.textContent = 'No file selected.';
+    els.vdaFileHint.classList.remove('error');
+    clearAllSelections();
+}
+
 function renderBasket() {
     els.vdaBasket.replaceChildren();
     const entries = Object.entries(state.vdaSelections).filter(([, s]) => s.size > 0);
@@ -633,7 +645,7 @@ function onVdaFileChange() {
     }
     els.vdaFileHint.textContent = `${file.name} (${formatBytes(file.size)})`;
     const m = file.name.match(/_v([0-9]+(?:\.[0-9]+){0,3})_/);
-    if (m && !els.vdaVenvVersion.value) els.vdaVenvVersion.value = m[1];
+    if (m && !els.vdaVersion.value) els.vdaVersion.value = m[1];
     updateVdaDeployButton();
 }
 
@@ -645,10 +657,10 @@ function formatBytes(n) {
 
 function updateVdaDeployButton() {
     const file = els.vdaFile.files && els.vdaFile.files[0];
-    const venv = els.vdaVenvVersion.value.trim();
+    const vdaVersion = els.vdaVersion.value.trim();
     const emqx = els.vdaEmqxHost.value.trim();
     const hasSelections = Object.values(state.vdaSelections || {}).some(s => s.size > 0);
-    els.vdaDeployBtn.disabled = !(file && venv && emqx && hasSelections);
+    els.vdaDeployBtn.disabled = !(file && vdaVersion && emqx && hasSelections);
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +777,12 @@ function clearAllMtSelections() {
     updateMtRunButton();
 }
 
+// Empty all editable bot-maintenance inputs (basket). Loaded inventory and
+// the command dropdown are preserved.
+function resetMtForm() {
+    clearAllMtSelections();
+}
+
 function renderMtBasket() {
     els.mtBasket.replaceChildren();
     const entries = Object.entries(state.mtSelections).filter(([, s]) => s.size > 0);
@@ -855,6 +873,47 @@ async function onMtRun() {
     }, 1000);
     els.mtOutput.hidden = false;
     els.mtOutput.textContent = `Running ${command} on ${total} bot${total !== 1 ? 's' : ''}…`;
+
+    // key = `${section}|${ip}`. Holds status, port, workerId, optional result fields.
+    const botState = new Map();
+    let plan = null;
+    let doneEvt = null;
+    let errorEvt = null;
+
+    const fmtElapsed = (ms) => (ms / 1000).toFixed(1) + 's';
+    const renderMt = () => {
+        const lines = [];
+        if (plan) {
+            const finished = [...botState.values()].filter(b => b.status === 'ok' || b.status === 'fail').length;
+            lines.push(`command: ${plan.command}    concurrency: ${plan.concurrency}    progress: ${finished}/${plan.total}`);
+            lines.push('');
+        }
+        for (const [key, b] of botState) {
+            let head;
+            if (b.status === 'pending') head = `[pending]  ${b.section}  ${b.ip}:${b.port}`;
+            else if (b.status === 'running') head = `[running w${b.workerId}]  ${b.section}  ${b.ip}:${b.port}`;
+            else if (b.status === 'ok') head = `────── ${b.section}  ${b.ip}:${b.port}  OK  (${fmtElapsed(b.elapsedMs)}) ──────`;
+            else head = `────── ${b.section}  ${b.ip}:${b.port}  FAILED (exit ${b.code})  (${fmtElapsed(b.elapsedMs)}) ──────`;
+            lines.push(head);
+            if (b.status === 'ok' || b.status === 'fail') {
+                if (b.stdout) lines.push(b.stdout.trimEnd());
+                if (b.stderr) lines.push('[stderr] ' + b.stderr.trimEnd());
+                if (!b.stdout && !b.stderr) lines.push('(no output)');
+                lines.push('');
+            }
+        }
+        if (doneEvt) {
+            lines.push('');
+            lines.push(`done: ${doneEvt.ok}/${doneEvt.total} OK    elapsed: ${fmtElapsed(doneEvt.elapsedMs)}`);
+        }
+        if (errorEvt) {
+            lines.push('');
+            lines.push(`Error: ${errorEvt.error || 'unknown'}`);
+        }
+        els.mtOutput.textContent = lines.join('\n');
+        els.mtOutput.scrollTop = els.mtOutput.scrollHeight;
+    };
+
     try {
         const res = await fetch('/api/operations/bot/run', {
             method: 'POST',
@@ -862,29 +921,67 @@ async function onMtRun() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ site: site.name, command, selections: selectionsObj })
         });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/x-ndjson')) {
+            // Pre-stream error (validation, 400, 429, 502 inventory read)
+            const body = await res.json().catch(() => ({}));
             els.mtOutput.textContent = `Error: ${body.error || res.statusText}`;
             return;
         }
-        const lines = [];
-        lines.push(`command: ${body.command}`);
-        lines.push(`bots: ${body.results.length}    elapsed: ${(body.elapsedMs / 1000).toFixed(1)}s`);
-        lines.push('');
-        for (const r of body.results) {
-            lines.push(`────── ${r.section}  ${r.ip}:${r.port}  ${r.code === 0 ? 'OK' : 'FAILED (exit ' + r.code + ')'} ──────`);
-            if (r.stdout) lines.push(r.stdout.trimEnd());
-            if (r.stderr) lines.push('[stderr] ' + r.stderr.trimEnd());
-            if (!r.stdout && !r.stderr) lines.push('(no output)');
-            lines.push('');
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        const keyOf = (e) => `${e.section}|${e.ip}`;
+        const handleLine = (line) => {
+            if (!line.trim()) return;
+            let ev;
+            try { ev = JSON.parse(line); } catch (e) { console.error('NDJSON parse', e, line); return; }
+            if (ev.type === 'plan') {
+                plan = ev;
+                for (const t of ev.targets) {
+                    botState.set(keyOf(t), { ip: t.ip, section: t.section, port: t.port, status: 'pending' });
+                }
+            } else if (ev.type === 'start') {
+                const b = botState.get(keyOf(ev)) || { ip: ev.ip, section: ev.section, port: ev.port };
+                b.status = 'running';
+                b.workerId = ev.workerId;
+                botState.set(keyOf(ev), b);
+            } else if (ev.type === 'result') {
+                const b = botState.get(keyOf(ev)) || { ip: ev.ip, section: ev.section, port: ev.port };
+                b.status = ev.code === 0 ? 'ok' : 'fail';
+                b.code = ev.code;
+                b.stdout = ev.stdout;
+                b.stderr = ev.stderr;
+                b.elapsedMs = ev.elapsedMs;
+                botState.set(keyOf(ev), b);
+            } else if (ev.type === 'done') {
+                doneEvt = ev;
+            } else if (ev.type === 'error') {
+                errorEvt = ev;
+            }
+            renderMt();
+        };
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let nl;
+            while ((nl = buffer.indexOf('\n')) !== -1) {
+                handleLine(buffer.slice(0, nl));
+                buffer = buffer.slice(nl + 1);
+            }
         }
-        els.mtOutput.textContent = lines.join('\n');
+        if (buffer.trim()) handleLine(buffer);
     } catch (err) {
-        els.mtOutput.textContent = 'Error: ' + err.message;
+        errorEvt = { error: err.message };
+        renderMt();
     } finally {
         clearInterval(tick);
         els.mtStatus.textContent = '';
         setOpsBusy(false);
+        // SSH chains close automatically server-side (see [ops] chain-closed in server.log).
+        // Empty basket so the next maintenance run starts fresh.
+        resetMtForm();
     }
 }
 
@@ -899,7 +996,7 @@ function setOpsBusy(busy) {
         els.site, els.bot, els.lookback, els.lookbackCustom, els.rowLimit, els.rowLimitCustom,
         els.fieldsMenuBtn, els.colMenuBtn, els.load, els.exportBtn,
         els.runAliasBtn, els.pingBotBtn,
-        els.vdaLoadBtn, els.vdaFile, els.vdaVenvVersion, els.vdaEmqxHost,
+        els.vdaLoadBtn, els.vdaFile, els.vdaVersion, els.vdaEmqxHost,
         els.vdaBotSection, els.vdaIpsAll, els.vdaIpsNone, els.vdaBasketClear, els.vdaDeployBtn,
         els.mtSection, els.mtCommand, els.mtIpsAll, els.mtIpsNone, els.mtBasketClear, els.mtRunBtn
     ];
@@ -919,7 +1016,7 @@ function setOpsBusy(busy) {
         if (els.fieldsMenuBtn) els.fieldsMenuBtn.disabled = !state.availableFields.length;
         if (els.colMenuBtn) els.colMenuBtn.disabled = !state.columns.length;
         if (els.vdaFile) els.vdaFile.disabled = false;
-        if (els.vdaVenvVersion) els.vdaVenvVersion.disabled = false;
+        if (els.vdaVersion) els.vdaVersion.disabled = false;
         if (els.vdaEmqxHost) els.vdaEmqxHost.disabled = false;
         if (els.vdaBotSection) els.vdaBotSection.disabled = !state.vdaSections;
         if (els.vdaIpsAll) els.vdaIpsAll.disabled = false;
@@ -945,7 +1042,7 @@ async function onVdaDeploy() {
         els.vdaOutput.textContent = 'File too large (limit 100 MB).';
         return;
     }
-    const venv = els.vdaVenvVersion.value.trim();
+    const vdaVersion = els.vdaVersion.value.trim();
     const emqx = els.vdaEmqxHost.value.trim();
     const selectionsObj = {};
     let totalIps = 0;
@@ -964,7 +1061,7 @@ async function onVdaDeploy() {
         `Deploy ${file.name} to ${site.name}?\n\n`
         + `${breakdown}\n`
         + `Total: ${totalIps} bots across ${Object.keys(selectionsObj).length} sections\n`
-        + `venv_version: ${venv}\n`
+        + `vda_remote_version: ${vdaVersion}\n`
         + `emqx_mqtt_host: ${emqx}\n\n`
         + `All other sections will be commented out.\n`
         + `This runs bash vda_deploy.sh on the target and may take several minutes.\n`
@@ -974,7 +1071,7 @@ async function onVdaDeploy() {
 
     const fd = new FormData();
     fd.append('site', site.name);
-    fd.append('venvVersion', venv);
+    fd.append('vdaRemoteVersion', vdaVersion);
     fd.append('emqxMqttHost', emqx);
     fd.append('selections', JSON.stringify(selectionsObj));
     fd.append('tar', file);
@@ -989,33 +1086,68 @@ async function onVdaDeploy() {
     }, 1000);
     els.vdaOutput.hidden = false;
     els.vdaOutput.textContent = 'Uploading tar and patching inventory…';
+    const streamedSteps = [];
+    let finalEvent = null;
+    const renderStream = () => {
+        const lines = ['--- steps ---'];
+        for (const s of streamedSteps) {
+            lines.push(`${s.at}  ${s.label}${s.code != null ? ` (exit ${s.code})` : ''}`);
+        }
+        if (finalEvent && finalEvent.type === 'result') {
+            lines.push('', `vda_deploy.sh exit code: ${finalEvent.code}`);
+            if (finalEvent.stdout) lines.push('--- stdout ---', finalEvent.stdout);
+            if (finalEvent.stderr) lines.push('--- stderr ---', finalEvent.stderr);
+        } else if (finalEvent && finalEvent.type === 'error') {
+            lines.push('', `Error: ${finalEvent.error || 'unknown'}`);
+        }
+        els.vdaOutput.textContent = lines.join('\n');
+        els.vdaOutput.scrollTop = els.vdaOutput.scrollHeight;
+    };
     try {
         const res = await fetch('/api/operations/vda/deploy', {
             method: 'POST',
             credentials: 'same-origin',
             body: fd
         });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            const stepsTxt = body.steps ? '\n\n--- steps completed ---\n' + body.steps.map(s => `${s.at}  ${s.label}`).join('\n') : '';
-            els.vdaOutput.textContent = `Error: ${body.error || res.statusText}${stepsTxt}`;
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/x-ndjson')) {
+            // Pre-stream error (validation/400/etc.) — comes back as plain JSON.
+            const body = await res.json().catch(() => ({}));
+            els.vdaOutput.textContent = `Error: ${body.error || res.statusText}`;
             return;
         }
-        const lines = [];
-        if (body.steps) {
-            lines.push('--- steps ---');
-            for (const s of body.steps) lines.push(`${s.at}  ${s.label}${s.code != null ? ` (exit ${s.code})` : ''}`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        const handleLine = (line) => {
+            if (!line.trim()) return;
+            let ev;
+            try { ev = JSON.parse(line); } catch (e) { console.error('NDJSON parse', e, line); return; }
+            if (ev.type === 'step') streamedSteps.push(ev);
+            else if (ev.type === 'result' || ev.type === 'error') finalEvent = ev;
+            renderStream();
+        };
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let nl;
+            while ((nl = buffer.indexOf('\n')) !== -1) {
+                handleLine(buffer.slice(0, nl));
+                buffer = buffer.slice(nl + 1);
+            }
         }
-        lines.push('', `vda_deploy.sh exit code: ${body.code}`);
-        if (body.stdout) lines.push('--- stdout ---', body.stdout);
-        if (body.stderr) lines.push('--- stderr ---', body.stderr);
-        els.vdaOutput.textContent = lines.join('\n');
+        if (buffer.trim()) handleLine(buffer);
     } catch (err) {
-        els.vdaOutput.textContent = 'Error: ' + err.message;
+        finalEvent = { type: 'error', error: err.message };
+        renderStream();
     } finally {
         clearInterval(tick);
         els.vdaDeployStatus.textContent = '';
         setOpsBusy(false);
+        // SSH chains close automatically server-side (see [ops] chain-closed in server.log).
+        // Empty all input fields so the next deploy starts fresh.
+        resetVdaForm();
     }
 }
 

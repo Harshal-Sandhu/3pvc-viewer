@@ -578,7 +578,7 @@ app.post(
         const tarFile = req.file;
         if (!tarFile) return res.status(400).json({ error: 'tar file is required' });
 
-        const venvVersion = String(req.body.venvVersion || '').trim();
+        const vdaRemoteVersion = String(req.body.vdaRemoteVersion || '').trim();
         const emqxHost = String(req.body.emqxMqttHost || '').trim();
         let selections;
         try {
@@ -589,9 +589,9 @@ app.post(
             return res.status(400).json({ error: 'selections must be a JSON object {section: [ips]}' });
         }
 
-        if (!/^[a-zA-Z0-9._\-]{1,32}$/.test(venvVersion)) {
+        if (!/^[a-zA-Z0-9._\-]{1,32}$/.test(vdaRemoteVersion)) {
             cleanupUpload(tarFile);
-            return res.status(400).json({ error: 'venvVersion must be 1-32 chars of [a-zA-Z0-9._-]' });
+            return res.status(400).json({ error: 'vdaRemoteVersion must be 1-32 chars of [a-zA-Z0-9._-]' });
         }
         if (!/^[a-zA-Z0-9.\-]{1,253}$/.test(emqxHost)) {
             cleanupUpload(tarFile);
@@ -635,15 +635,29 @@ app.post(
             return res.status(429).json({ error: 'Another operation is already in progress for this site.' });
         }
         opsRunning.add(lockKey);
+        // Stream NDJSON: one event per line, flush as each step completes so the
+        // client sees progress in real time instead of after the whole deploy.
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('X-Accel-Buffering', 'no'); // disable nginx response buffering
+        res.flushHeaders();
         const steps = [];
-        const addStep = (label, info = {}) => steps.push({ label, at: new Date().toISOString(), ...info });
+        const writeEvent = (obj) => {
+            if (res.writableEnded) return;
+            res.write(JSON.stringify(obj) + '\n');
+        };
+        const addStep = (label, info = {}) => {
+            const step = { type: 'step', label, at: new Date().toISOString(), ...info };
+            steps.push(step);
+            writeEvent(step);
+        };
         try {
             addStep('upload-received', { size: tarFile.size, filename: safeTarName });
 
             addStep('scp-tar-start');
             const fileStream = fs.createReadStream(tarFile.path);
             await writeRemoteFile(
-                { ...cfg.opts, useSudo: true, timeoutMs: 15 * 60 * 1000 },
+                { ...cfg.opts, useSudo: true, chownTo: 'gor:gor', timeoutMs: 15 * 60 * 1000 },
                 `${VDA_REMOTE_BUILD_DIR}/${safeTarName}`,
                 fileStream
             );
@@ -652,7 +666,7 @@ app.post(
             addStep('patch-group-vars-start');
             const groupVarsText = await readRemoteFile(cfg.opts, VDA_GROUP_VARS_PATH);
             const newGroupVars = updateGroupVars(groupVarsText, {
-                venv_version: venvVersion,
+                vda_remote_version: vdaRemoteVersion,
                 emqx_mqtt_host: emqxHost
             });
             await writeRemoteFile({ ...cfg.opts, useSudo: true }, VDA_GROUP_VARS_PATH, newGroupVars);
@@ -676,19 +690,22 @@ app.post(
             appendOpsAudit(
                 req.session.user,
                 siteName,
-                `vda-deploy ${safeTarName} ${summary} venv=${venvVersion}`,
+                `vda-deploy ${safeTarName} ${summary} vda_remote_version=${vdaRemoteVersion}`,
                 `exit=${deployResult.code}`
             );
-            res.json({
+            writeEvent({
+                type: 'result',
                 ok: true,
                 code: deployResult.code,
                 stdout: deployResult.stdout.slice(0, 256 * 1024),
                 stderr: deployResult.stderr.slice(0, 256 * 1024),
                 steps
             });
+            res.end();
         } catch (err) {
             appendOpsAudit(req.session.user, siteName, `vda-deploy ${safeTarName}`, `error: ${err.message}`);
-            res.status(502).json({ error: err.message, steps });
+            writeEvent({ type: 'error', error: err.message, steps });
+            if (!res.writableEnded) res.end();
         } finally {
             opsRunning.delete(lockKey);
             cleanupUpload(tarFile);
@@ -849,6 +866,7 @@ function shellQuote(s) {
 
 const MAINTENANCE_PER_BOT_TIMEOUT_MS = 2 * 60 * 1000;
 const MAINTENANCE_REQ_TIMEOUT_MS    = 30 * 60 * 1000;
+const MAINTENANCE_CONCURRENCY       = 7;
 
 app.post(
     '/api/operations/bot/run',
@@ -893,23 +911,54 @@ app.post(
         }
         opsRunning.add(lockKey);
         const startedAt = Date.now();
+
+        // Read inventory BEFORE streaming so we can still 502 cleanly if it fails
+        let invText, ports;
         try {
-            let invText, ports;
-            try {
-                invText = await readRemoteFile(cfg.opts, VDA_INVENTORY_PATH);
-                ports = parseInventoryPorts(invText);
-            } catch (err) {
-                return res.status(502).json({ error: 'Could not read inventory to get bot SSH ports: ' + err.message });
-            }
-            const spec = MAINTENANCE_COMMANDS[command];
-            const sudoPassword = sites[siteName].botSudoPassword || cfg.opts.gorPassword;
-            const shellCmd = spec.sudo
-                ? `echo ${shellQuote(sudoPassword)} | sudo -S ${spec.cmd}`
-                : spec.cmd;
-            const results = [];
-            for (const t of targets) {
+            invText = await readRemoteFile(cfg.opts, VDA_INVENTORY_PATH);
+            ports = parseInventoryPorts(invText);
+        } catch (err) {
+            opsRunning.delete(lockKey);
+            return res.status(502).json({ error: 'Could not read inventory to get bot SSH ports: ' + err.message });
+        }
+
+        // Stream NDJSON: one event per bot start/result so the client renders
+        // each bot's outcome the moment it lands.
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders();
+        const writeEvent = (obj) => {
+            if (res.writableEnded) return;
+            res.write(JSON.stringify(obj) + '\n');
+        };
+
+        const spec = MAINTENANCE_COMMANDS[command];
+        const sudoPassword = sites[siteName].botSudoPassword || cfg.opts.gorPassword;
+        const shellCmd = spec.sudo
+            ? `echo ${shellQuote(sudoPassword)} | sudo -S ${spec.cmd}`
+            : spec.cmd;
+
+        writeEvent({
+            type: 'plan',
+            command,
+            total: targets.length,
+            concurrency: Math.min(MAINTENANCE_CONCURRENCY, targets.length),
+            targets: targets.map(t => ({ ip: t.ip, section: t.section, port: ports[t.section] || 22 }))
+        });
+
+        const results = [];
+        let nextIdx = 0;
+        const worker = async (workerId) => {
+            while (true) {
+                const i = nextIdx++;
+                if (i >= targets.length) return;
+                const t = targets[i];
                 const port = ports[t.section] || 22;
-                console.error('[ops]', new Date().toISOString(), 'bot/run', { ip: t.ip, port, command });
+                const bStart = Date.now();
+                writeEvent({ type: 'start', workerId, ip: t.ip, section: t.section, port });
+                console.error('[ops]', new Date().toISOString(), 'bot/run', { worker: workerId, ip: t.ip, port, command });
+                let evt;
                 try {
                     const r = await runOnBot(cfg.opts, {
                         botIp: t.ip,
@@ -917,26 +966,40 @@ app.post(
                         command: shellCmd,
                         timeoutMs: MAINTENANCE_PER_BOT_TIMEOUT_MS
                     });
-                    results.push({
-                        ip: t.ip,
-                        section: t.section,
-                        port,
+                    evt = {
+                        type: 'result', workerId, ip: t.ip, section: t.section, port,
                         code: r.code,
                         stdout: r.stdout.slice(0, 16384),
-                        stderr: r.stderr.slice(0, 16384)
-                    });
+                        stderr: r.stderr.slice(0, 16384),
+                        elapsedMs: Date.now() - bStart
+                    };
                 } catch (err) {
-                    results.push({ ip: t.ip, section: t.section, port, code: -1, stdout: '', stderr: 'ERROR: ' + err.message });
+                    evt = {
+                        type: 'result', workerId, ip: t.ip, section: t.section, port,
+                        code: -1, stdout: '', stderr: 'ERROR: ' + err.message,
+                        elapsedMs: Date.now() - bStart
+                    };
                 }
+                results.push(evt);
+                writeEvent(evt);
             }
+        };
+
+        try {
+            const poolSize = Math.min(MAINTENANCE_CONCURRENCY, targets.length);
+            await Promise.all(Array.from({ length: poolSize }, (_, idx) => worker(idx + 1)));
             const ok = results.filter(r => r.code === 0).length;
             appendOpsAudit(
                 req.session.user,
                 siteName,
-                `bot-run ${command} (${targets.length} bots, ${ok} ok)`,
+                `bot-run ${command} (${targets.length} bots, ${ok} ok, conc=${poolSize})`,
                 `done`
             );
-            res.json({ ok: true, command, results, elapsedMs: Date.now() - startedAt });
+            writeEvent({ type: 'done', ok, total: results.length, elapsedMs: Date.now() - startedAt });
+            res.end();
+        } catch (err) {
+            writeEvent({ type: 'error', error: err.message });
+            if (!res.writableEnded) res.end();
         } finally {
             opsRunning.delete(lockKey);
         }

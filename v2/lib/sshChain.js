@@ -111,6 +111,7 @@ async function runOnSiteServer(opts) {
         throw err;
     } finally {
         try { conn.end(); } catch (_) { /* ignore */ }
+        debugOps('chain-closed', { butlerIp: opts.butlerIp, targetIp: opts.targetIp });
     }
 }
 
@@ -137,9 +138,15 @@ async function writeRemoteFile(opts, remotePath, content) {
     const timeoutMs = Number(opts.timeoutMs || process.env.SSH_TIMEOUT_MS || 60000);
     const isStream = content && typeof content.pipe === 'function';
     debugOps('writeRemoteFile', { remotePath, isStream, useSudo: !!opts.useSudo, size: isStream ? '(stream)' : (content ? content.length : 0) });
-    const writeCmd = opts.useSudo
-        ? `sudo -n tee ${shellQuote(remotePath)} > /dev/null`
-        : `cat > ${shellQuote(remotePath)}`;
+    let writeCmd;
+    if (opts.useSudo) {
+        const chownPart = opts.chownTo
+            ? ` && sudo -n chown ${shellQuote(opts.chownTo)} ${shellQuote(remotePath)}`
+            : '';
+        writeCmd = `sudo -n tee ${shellQuote(remotePath)} > /dev/null${chownPart}`;
+    } else {
+        writeCmd = `cat > ${shellQuote(remotePath)}`;
+    }
     const cmd = buildMiddleCmd({ ...opts, command: writeCmd });
     const conn = await connectJumper();
     try {
@@ -159,6 +166,7 @@ async function writeRemoteFile(opts, remotePath, content) {
         return result;
     } finally {
         try { conn.end(); } catch (_) { /* ignore */ }
+        debugOps('chain-closed', { butlerIp: opts.butlerIp, targetIp: opts.targetIp, remotePath });
     }
 }
 

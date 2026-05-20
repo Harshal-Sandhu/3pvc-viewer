@@ -211,5 +211,24 @@
     "port": 8086,
     "db": "GreyOrange",
     "measurement": "bot_firmware_version_details"
+  },
+  "validation_lab": {
+    "ip": "192.168.9.18",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details",
+    "complianceMeasurement": "compliance_details",
+    "releasedVdaVersion": "",
+    "recipients": [],
+    "alertSchedule": {
+      "enabled": false,
+      "frequency": "daily",
+      "time": "08:00",
+      "dayOfWeek": 1
+    },
+    "butlerIp": "172.29.40.48",
+    "targetIp": "192.168.6.34",
+    "gorPassword": "apj0702",
+    "botSudoPassword": "apj0702"
   }
 }
