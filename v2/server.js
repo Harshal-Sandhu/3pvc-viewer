@@ -6,8 +6,8 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
-const { runOnSiteServer, readRemoteFile, writeRemoteFile } = require('./lib/sshChain');
-const { parseInventory, applyActiveIps, updateGroupVars } = require('./lib/vdaInventory');
+const { runOnSiteServer, runOnBot, readRemoteFile, writeRemoteFile } = require('./lib/sshChain');
+const { parseInventory, parseInventoryPorts, applyActiveIps, applyMultiSectionActiveIps, updateGroupVars } = require('./lib/vdaInventory');
 const multer = require('multer');
 const os = require('os');
 const crypto = require('crypto');
@@ -196,7 +196,8 @@ function siteToPublic(name, s) {
         alertSchedule: normalizeSchedule(s.alertSchedule),
         butlerIp: s.butlerIp || '',
         targetIp: s.targetIp || '',
-        hasGorPassword: !!s.gorPassword
+        hasGorPassword: !!s.gorPassword,
+        hasBotSudoPassword: !!s.botSudoPassword
     };
 }
 
@@ -302,6 +303,9 @@ function validateSiteFields(body, { allowName = false } = {}) {
     if (body.gorPassword != null && body.gorPassword !== '') {
         if (typeof body.gorPassword !== 'string' || body.gorPassword.length > 256) errors.push('gorPassword must be a string up to 256 chars');
     }
+    if (body.botSudoPassword != null && body.botSudoPassword !== '') {
+        if (typeof body.botSudoPassword !== 'string' || body.botSudoPassword.length > 256) errors.push('botSudoPassword must be a string up to 256 chars');
+    }
     return errors;
 }
 
@@ -331,7 +335,8 @@ app.post('/api/sites', requireAdmin, (req, res) => {
         alertSchedule: scheduleCheck.value || normalizeSchedule(),
         butlerIp: (body.butlerIp || '').trim(),
         targetIp: (body.targetIp || '').trim(),
-        gorPassword: (body.gorPassword || '').trim()
+        gorPassword: (body.gorPassword || '').trim(),
+        botSudoPassword: (body.botSudoPassword || '').trim()
     };
     try {
         saveSites();
@@ -370,6 +375,7 @@ app.put('/api/sites/:name', requireAdmin, (req, res) => {
     if (body.butlerIp != null) s.butlerIp = body.butlerIp.trim();
     if (body.targetIp != null) s.targetIp = body.targetIp.trim();
     if (body.gorPassword != null && body.gorPassword !== '') s.gorPassword = body.gorPassword.trim();
+    if (body.botSudoPassword != null && body.botSudoPassword !== '') s.botSudoPassword = body.botSudoPassword.trim();
 
     try {
         saveSites();
@@ -539,10 +545,14 @@ app.get('/api/operations/vda/inventory', requireAuth, async (req, res) => {
     const cfg = siteOpsConfig(siteName);
     if (cfg.error) return res.status(400).json({ error: cfg.error });
     try {
-        const text = await readRemoteFile(cfg.opts, VDA_INVENTORY_PATH);
+        const [text, ipToBot] = await Promise.all([
+            readRemoteFile(cfg.opts, VDA_INVENTORY_PATH),
+            fetchIpToBotMap(sites[siteName])
+        ]);
         const sections = parseInventory(text);
-        console.error('[ops]', new Date().toISOString(), 'inventory parsed', { sectionCount: Object.keys(sections).length });
-        res.json({ ok: true, sections });
+        const ports = parseInventoryPorts(text);
+        console.error('[ops]', new Date().toISOString(), 'inventory parsed', { sectionCount: Object.keys(sections).length, ipMapSize: Object.keys(ipToBot).length });
+        res.json({ ok: true, sections, ports, ipToBot });
     } catch (err) {
         console.error('[ops]', new Date().toISOString(), 'inventory load failed', { error: err.message });
         res.status(502).json({ error: err.message });
@@ -570,14 +580,13 @@ app.post(
 
         const venvVersion = String(req.body.venvVersion || '').trim();
         const emqxHost = String(req.body.emqxMqttHost || '').trim();
-        const botSection = String(req.body.botSection || '').trim();
-        let activeIps;
+        let selections;
         try {
-            activeIps = JSON.parse(req.body.activeIps || '[]');
-            if (!Array.isArray(activeIps)) throw new Error();
+            selections = JSON.parse(req.body.selections || '{}');
+            if (!selections || typeof selections !== 'object' || Array.isArray(selections)) throw new Error();
         } catch {
             cleanupUpload(tarFile);
-            return res.status(400).json({ error: 'activeIps must be a JSON array of IPv4 strings' });
+            return res.status(400).json({ error: 'selections must be a JSON object {section: [ips]}' });
         }
 
         if (!/^[a-zA-Z0-9._\-]{1,32}$/.test(venvVersion)) {
@@ -588,15 +597,32 @@ app.post(
             cleanupUpload(tarFile);
             return res.status(400).json({ error: 'emqxMqttHost must be a valid hostname or IPv4' });
         }
-        if (!/^[a-zA-Z0-9_]+_production$/.test(botSection)) {
+        const sectionEntries = Object.entries(selections);
+        if (sectionEntries.length === 0) {
             cleanupUpload(tarFile);
-            return res.status(400).json({ error: 'botSection must look like xxx_production' });
+            return res.status(400).json({ error: 'Pick at least one bot in at least one section' });
         }
-        for (const ip of activeIps) {
-            if (typeof ip !== 'string' || !/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+        let totalIps = 0;
+        for (const [section, ips] of sectionEntries) {
+            if (!/^[a-zA-Z0-9_]+_production$/.test(section)) {
                 cleanupUpload(tarFile);
-                return res.status(400).json({ error: `Invalid IP in activeIps: ${ip}` });
+                return res.status(400).json({ error: `Invalid section name: ${section}` });
             }
+            if (!Array.isArray(ips)) {
+                cleanupUpload(tarFile);
+                return res.status(400).json({ error: `selections.${section} must be an array` });
+            }
+            for (const ip of ips) {
+                if (typeof ip !== 'string' || !/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+                    cleanupUpload(tarFile);
+                    return res.status(400).json({ error: `Invalid IP in selections.${section}: ${ip}` });
+                }
+                totalIps += 1;
+            }
+        }
+        if (totalIps === 0) {
+            cleanupUpload(tarFile);
+            return res.status(400).json({ error: 'No IPs selected for deploy' });
         }
         if (!/\.(tar|tar\.gz|tgz)$/i.test(tarFile.originalname)) {
             cleanupUpload(tarFile);
@@ -634,7 +660,7 @@ app.post(
 
             addStep('patch-inventory-start');
             const invText = await readRemoteFile(cfg.opts, VDA_INVENTORY_PATH);
-            const newInv = applyActiveIps(invText, botSection, activeIps);
+            const newInv = applyMultiSectionActiveIps(invText, selections);
             await writeRemoteFile({ ...cfg.opts, useSudo: true }, VDA_INVENTORY_PATH, newInv);
             addStep('patch-inventory-done');
 
@@ -646,10 +672,11 @@ app.post(
             });
             addStep('vda-deploy-done', { code: deployResult.code });
 
+            const summary = sectionEntries.map(([s, ips]) => `${s}(${ips.length})`).join(',');
             appendOpsAudit(
                 req.session.user,
                 siteName,
-                `vda-deploy ${safeTarName} ${botSection}(${activeIps.length}ips) venv=${venvVersion}`,
+                `vda-deploy ${safeTarName} ${summary} venv=${venvVersion}`,
                 `exit=${deployResult.code}`
             );
             res.json({
@@ -674,9 +701,67 @@ function cleanupUpload(file) {
     fs.unlink(file.path, () => { /* ignore */ });
 }
 
+async function influxQuery(site, q, timeoutMs = 10000) {
+    const url = `http://${site.ip}:${site.port}/query?db=${encodeURIComponent(site.db)}&q=${encodeURIComponent(q)}`;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+        const r = await fetch(url, { signal: ac.signal });
+        if (!r.ok) return null;
+        return await r.json();
+    } catch {
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+const BOT_TAG_CACHE = new Map();
+async function discoverBotTag(site) {
+    if (BOT_TAG_CACHE.has(site.ip)) return BOT_TAG_CACHE.get(site.ip);
+    const j = await influxQuery(site, `SHOW TAG KEYS FROM "${site.measurement}"`);
+    const tags = ((j && j.results && j.results[0] && j.results[0].series && j.results[0].series[0] && j.results[0].series[0].values) || []).map(v => v[0]);
+    let chosen = null;
+    if (tags.includes('bot_id')) chosen = 'bot_id';
+    else if (tags.includes('butler_id')) chosen = 'butler_id';
+    BOT_TAG_CACHE.set(site.ip, chosen);
+    return chosen;
+}
+
+async function fetchIpToBotMap(site) {
+    const botTag = await discoverBotTag(site);
+    if (!botTag) return {};
+    const j = await influxQuery(site, `SELECT last("vda_version") FROM "${site.measurement}" GROUP BY "${botTag}", "ip"`);
+    const series = (j && j.results && j.results[0] && j.results[0].series) || [];
+    const map = {};
+    for (const s of series) {
+        const t = s.tags || {};
+        const ip = t.ip;
+        const botId = t[botTag];
+        if (ip && botId) map[ip] = botId;
+    }
+    if (Object.keys(map).length === 0) {
+        // ip may be a field rather than a tag (e.g. walmartpot). Fall back to one row per bot.
+        const j2 = await influxQuery(site, `SELECT last("ip"), last("vda_version") FROM "${site.measurement}" GROUP BY "${botTag}"`);
+        const series2 = (j2 && j2.results && j2.results[0] && j2.results[0].series) || [];
+        for (const s of series2) {
+            const t = s.tags || {};
+            const botId = t[botTag];
+            const cols = s.columns || [];
+            const ipIdx = cols.indexOf('last');
+            const row = (s.values && s.values[0]) || [];
+            const ip = ipIdx !== -1 ? row[ipIdx] : null;
+            if (ip && botId && typeof ip === 'string') map[ip] = botId;
+        }
+    }
+    return map;
+}
+
 async function fetchBotIp(site, botId) {
+    const botTag = await discoverBotTag(site);
+    if (!botTag) return null;
     const escaped = String(botId).replace(/'/g, "");
-    const q = `SELECT * FROM "${site.measurement}" WHERE "bot_id" = '${escaped}' ORDER BY time DESC LIMIT 1`;
+    const q = `SELECT * FROM "${site.measurement}" WHERE "${botTag}" = '${escaped}' ORDER BY time DESC LIMIT 1`;
     const url = `http://${site.ip}:${site.port}/query?db=${encodeURIComponent(site.db)}&q=${encodeURIComponent(q)}`;
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 10000);
@@ -750,6 +835,113 @@ app.post('/api/operations/ping-bot', requireAuth, async (req, res) => {
         opsRunning.delete(lockKey);
     }
 });
+
+const MAINTENANCE_COMMANDS = {
+    vdarestart: { sudo: true,  cmd: 'systemctl restart vda_remote.service' },
+    vdastop:    { sudo: true,  cmd: 'systemctl stop vda_remote.service' },
+    vdastart:   { sudo: true,  cmd: 'systemctl start vda_remote.service' },
+    savelog:    { sudo: false, cmd: 'bash /home/gor/save_all_logs_ttp.sh' }
+};
+
+function shellQuote(s) {
+    return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
+const MAINTENANCE_PER_BOT_TIMEOUT_MS = 2 * 60 * 1000;
+const MAINTENANCE_REQ_TIMEOUT_MS    = 30 * 60 * 1000;
+
+app.post(
+    '/api/operations/bot/run',
+    requireAuth,
+    (req, res, next) => {
+        req.setTimeout(MAINTENANCE_REQ_TIMEOUT_MS + 60000);
+        res.setTimeout(MAINTENANCE_REQ_TIMEOUT_MS + 60000);
+        next();
+    },
+    async (req, res) => {
+        const siteName = req.body && req.body.site;
+        const cfg = siteOpsConfig(siteName);
+        if (cfg.error) return res.status(400).json({ error: cfg.error });
+        const command = String(req.body.command || '');
+        if (!Object.prototype.hasOwnProperty.call(MAINTENANCE_COMMANDS, command)) {
+            return res.status(400).json({ error: `Unknown command. Allowed: ${Object.keys(MAINTENANCE_COMMANDS).join(', ')}` });
+        }
+        const selections = (req.body && req.body.selections) || {};
+        if (typeof selections !== 'object' || Array.isArray(selections)) {
+            return res.status(400).json({ error: 'selections must be a JSON object {section: [ips]}' });
+        }
+        const targets = [];
+        for (const [section, ips] of Object.entries(selections)) {
+            if (!/^[a-zA-Z0-9_]+_production$/.test(section)) {
+                return res.status(400).json({ error: `Invalid section: ${section}` });
+            }
+            if (!Array.isArray(ips)) {
+                return res.status(400).json({ error: `selections.${section} must be an array` });
+            }
+            for (const ip of ips) {
+                if (typeof ip !== 'string' || !/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+                    return res.status(400).json({ error: `Invalid IP in selections.${section}: ${ip}` });
+                }
+                targets.push({ section, ip });
+            }
+        }
+        if (targets.length === 0) return res.status(400).json({ error: 'No bots selected' });
+
+        const lockKey = `site:${siteName}`;
+        if (opsRunning.has(lockKey)) {
+            return res.status(429).json({ error: 'Another operation is already in progress for this site.' });
+        }
+        opsRunning.add(lockKey);
+        const startedAt = Date.now();
+        try {
+            let invText, ports;
+            try {
+                invText = await readRemoteFile(cfg.opts, VDA_INVENTORY_PATH);
+                ports = parseInventoryPorts(invText);
+            } catch (err) {
+                return res.status(502).json({ error: 'Could not read inventory to get bot SSH ports: ' + err.message });
+            }
+            const spec = MAINTENANCE_COMMANDS[command];
+            const sudoPassword = sites[siteName].botSudoPassword || cfg.opts.gorPassword;
+            const shellCmd = spec.sudo
+                ? `echo ${shellQuote(sudoPassword)} | sudo -S ${spec.cmd}`
+                : spec.cmd;
+            const results = [];
+            for (const t of targets) {
+                const port = ports[t.section] || 22;
+                console.error('[ops]', new Date().toISOString(), 'bot/run', { ip: t.ip, port, command });
+                try {
+                    const r = await runOnBot(cfg.opts, {
+                        botIp: t.ip,
+                        botPort: port,
+                        command: shellCmd,
+                        timeoutMs: MAINTENANCE_PER_BOT_TIMEOUT_MS
+                    });
+                    results.push({
+                        ip: t.ip,
+                        section: t.section,
+                        port,
+                        code: r.code,
+                        stdout: r.stdout.slice(0, 16384),
+                        stderr: r.stderr.slice(0, 16384)
+                    });
+                } catch (err) {
+                    results.push({ ip: t.ip, section: t.section, port, code: -1, stdout: '', stderr: 'ERROR: ' + err.message });
+                }
+            }
+            const ok = results.filter(r => r.code === 0).length;
+            appendOpsAudit(
+                req.session.user,
+                siteName,
+                `bot-run ${command} (${targets.length} bots, ${ok} ok)`,
+                `done`
+            );
+            res.json({ ok: true, command, results, elapsedMs: Date.now() - startedAt });
+        } finally {
+            opsRunning.delete(lockKey);
+        }
+    }
+);
 
 app.post('/api/operations/run-alias', requireAuth, async (req, res) => {
     const siteName = req.body && req.body.site;

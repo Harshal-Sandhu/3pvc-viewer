@@ -53,9 +53,28 @@ const els = {
     vdaIpsList: $('#vda-ips-list'),
     vdaIpsAll: $('#vda-ips-all'),
     vdaIpsNone: $('#vda-ips-none'),
+    vdaBasket: $('#vda-basket'),
+    vdaBasketSummary: $('#vda-basket-summary'),
+    vdaBasketClear: $('#vda-basket-clear'),
     vdaDeployBtn: $('#vda-deploy-btn'),
     vdaDeployStatus: $('#vda-deploy-status'),
     vdaOutput: $('#vda-output'),
+
+    mtCard: $('#bot-maintenance-card'),
+    mtHint: $('#mt-hint'),
+    mtForm: $('#mt-form'),
+    mtSection: $('#mt-section'),
+    mtCommand: $('#mt-command'),
+    mtIpsWrap: $('#mt-ips-wrap'),
+    mtIpsList: $('#mt-ips-list'),
+    mtIpsAll: $('#mt-ips-all'),
+    mtIpsNone: $('#mt-ips-none'),
+    mtBasket: $('#mt-basket'),
+    mtBasketSummary: $('#mt-basket-summary'),
+    mtBasketClear: $('#mt-basket-clear'),
+    mtRunBtn: $('#mt-run-btn'),
+    mtStatus: $('#mt-status'),
+    mtOutput: $('#mt-output'),
 
     head: $('#data-head'),
     body: $('#data-body'),
@@ -99,7 +118,10 @@ const state = {
     availableFields: [],       // every field/tag name discoverable from the measurement
     columns: [],               // columns returned by the last query
     rows: [],                  // rows returned by the last query
-    vdaSections: null          // { section_name: [{ip, active}, ...] } or null
+    vdaSections: null,         // { section_name: [{ip, active}, ...] } or null
+    vdaIpToBot: {},            // { "10.95.246.101": "42", ... }
+    vdaSelections: {},         // { section_name: Set<ip>, ... } accumulated across section switches
+    mtSelections: {}           // same shape, for the maintenance widget
 };
 
 // ---------------------------------------------------------------------------
@@ -267,7 +289,14 @@ function wireEvents() {
     els.vdaBotSection.addEventListener('change', onVdaSectionChange);
     els.vdaIpsAll.addEventListener('click', () => setAllIpCheckboxes(true));
     els.vdaIpsNone.addEventListener('click', () => setAllIpCheckboxes(false));
+    els.vdaBasketClear.addEventListener('click', clearAllSelections);
     els.vdaDeployBtn.addEventListener('click', onVdaDeploy);
+
+    els.mtSection.addEventListener('change', onMtSectionChange);
+    els.mtIpsAll.addEventListener('click', () => setAllMtIpCheckboxes(true));
+    els.mtIpsNone.addEventListener('click', () => setAllMtIpCheckboxes(false));
+    els.mtBasketClear.addEventListener('click', clearAllMtSelections);
+    els.mtRunBtn.addEventListener('click', onMtRun);
 
     els.fieldsMenuBtn.addEventListener('click', toggleFieldsMenu);
     els.colMenuBtn.addEventListener('click', toggleColMenu);
@@ -369,6 +398,7 @@ function updateOpsCard() {
         els.opsHint.textContent = `Will SSH via jumper → ${site.butlerIp} → gor@${site.targetIp}.`;
     }
     updateVdaCard();
+    updateMtCard();
 }
 
 function updateVdaCard() {
@@ -397,15 +427,32 @@ async function onVdaLoadInventory() {
     try {
         const r = await api(`/api/operations/vda/inventory?site=${encodeURIComponent(site.name)}`);
         state.vdaSections = r.sections || {};
+        state.vdaIpToBot = r.ipToBot || {};
+        state.vdaSelections = {};
+        state.mtSelections = {};
         populateBotSectionSelect();
+        populateMtSectionSelect();
+        renderBasket();
+        renderMtBasket();
         updateVdaCard();
+        updateMtCard();
     } catch (err) {
         els.vdaHint.textContent = 'Failed to load inventory: ' + err.message;
         state.vdaSections = null;
+        state.vdaIpToBot = {};
+        state.vdaSelections = {};
+        state.mtSelections = {};
+        renderBasket();
+        renderMtBasket();
+        updateMtCard();
     } finally {
         els.vdaLoadBtn.disabled = false;
         els.vdaLoadBtn.textContent = originalLabel;
     }
+}
+
+function ipSortKey(ip) {
+    return ip.split('.').reduce((acc, part) => acc * 256 + (parseInt(part, 10) || 0), 0);
 }
 
 function populateBotSectionSelect() {
@@ -439,7 +486,7 @@ function renderIpCheckboxes(sectionName) {
         els.vdaIpsWrap.hidden = true;
         return;
     }
-    const ips = state.vdaSections[sectionName];
+    const ips = state.vdaSections[sectionName].slice().sort((a, b) => ipSortKey(a.ip) - ipSortKey(b.ip));
     if (ips.length === 0) {
         els.vdaIpsWrap.hidden = false;
         const note = document.createElement('p');
@@ -449,6 +496,7 @@ function renderIpCheckboxes(sectionName) {
         return;
     }
     els.vdaIpsWrap.hidden = false;
+    const selectedSet = state.vdaSelections[sectionName] || new Set();
     for (const { ip, active } of ips) {
         const label = document.createElement('label');
         label.className = 'vda-ip-row';
@@ -456,28 +504,130 @@ function renderIpCheckboxes(sectionName) {
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.value = ip;
-        cb.checked = false;
-        cb.addEventListener('change', updateVdaDeployButton);
+        cb.checked = selectedSet.has(ip);
+        cb.addEventListener('change', () => onIpToggle(sectionName, ip, cb.checked));
         const span = document.createElement('span');
-        span.textContent = ip + (active ? ' • currently active' : '');
+        const botId = state.vdaIpToBot[ip];
+        const idPart = botId ? ` (bot ${botId})` : '';
+        const activePart = active ? ' • currently active' : '';
+        span.textContent = ip + idPart + activePart;
         label.append(cb, span);
         els.vdaIpsList.append(label);
     }
 }
 
-function setAllIpCheckboxes(checked) {
-    els.vdaIpsList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.checked = checked; });
+function onIpToggle(sectionName, ip, checked) {
+    if (!state.vdaSelections[sectionName]) state.vdaSelections[sectionName] = new Set();
+    if (checked) {
+        state.vdaSelections[sectionName].add(ip);
+    } else {
+        state.vdaSelections[sectionName].delete(ip);
+        if (state.vdaSelections[sectionName].size === 0) delete state.vdaSelections[sectionName];
+    }
+    renderBasket();
     updateVdaDeployButton();
 }
 
-function collectActiveIps() {
-    return Array.from(els.vdaIpsList.querySelectorAll('input[type=checkbox]:checked')).map(cb => cb.value);
+function setAllIpCheckboxes(checked) {
+    const sectionName = els.vdaBotSection.value;
+    if (!sectionName || !state.vdaSections[sectionName]) return;
+    if (!state.vdaSelections[sectionName]) state.vdaSelections[sectionName] = new Set();
+    for (const { ip } of state.vdaSections[sectionName]) {
+        if (checked) state.vdaSelections[sectionName].add(ip);
+        else state.vdaSelections[sectionName].delete(ip);
+    }
+    if (!checked) delete state.vdaSelections[sectionName];
+    renderIpCheckboxes(sectionName);
+    renderBasket();
+    updateVdaDeployButton();
 }
+
+function clearAllSelections() {
+    state.vdaSelections = {};
+    const sectionName = els.vdaBotSection.value;
+    if (sectionName) renderIpCheckboxes(sectionName);
+    renderBasket();
+    updateVdaDeployButton();
+}
+
+function renderBasket() {
+    els.vdaBasket.replaceChildren();
+    const entries = Object.entries(state.vdaSelections).filter(([, s]) => s.size > 0);
+    if (entries.length === 0) {
+        els.vdaBasket.textContent = 'No bots selected yet.';
+        els.vdaBasketSummary.textContent = '';
+        els.vdaBasketClear.disabled = true;
+        return;
+    }
+    els.vdaBasketClear.disabled = false;
+    let total = 0;
+    entries.sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [section, ipSet] of entries) {
+        total += ipSet.size;
+        const row = document.createElement('div');
+        row.className = 'vda-basket-row';
+        const header = document.createElement('div');
+        header.className = 'vda-basket-row-header';
+        const sectionLabel = document.createElement('strong');
+        sectionLabel.textContent = `${section} (${ipSet.size})`;
+        const removeAll = document.createElement('button');
+        removeAll.type = 'button';
+        removeAll.className = 'btn-subtle btn-small';
+        removeAll.textContent = 'remove section';
+        removeAll.addEventListener('click', () => {
+            delete state.vdaSelections[section];
+            if (els.vdaBotSection.value === section) renderIpCheckboxes(section);
+            renderBasket();
+            updateVdaDeployButton();
+        });
+        header.append(sectionLabel, removeAll);
+        row.append(header);
+        const chips = document.createElement('div');
+        chips.className = 'vda-chips';
+        const ipsSorted = Array.from(ipSet).sort((a, b) => ipSortKey(a) - ipSortKey(b));
+        for (const ip of ipsSorted) {
+            const chip = document.createElement('span');
+            chip.className = 'vda-chip';
+            const botId = state.vdaIpToBot[ip];
+            const labelText = botId ? `${ip} (bot ${botId})` : ip;
+            chip.textContent = labelText;
+            const x = document.createElement('button');
+            x.type = 'button';
+            x.className = 'vda-chip-x';
+            x.textContent = '×';
+            x.title = 'Remove';
+            x.addEventListener('click', () => onIpToggle(section, ip, false));
+            chip.append(x);
+            chips.append(chip);
+        }
+        row.append(chips);
+        els.vdaBasket.append(row);
+    }
+    els.vdaBasketSummary.textContent = `${total} bot${total !== 1 ? 's' : ''} across ${entries.length} section${entries.length !== 1 ? 's' : ''}`;
+}
+
+const VDA_TAR_NAME_RE = /\.(tar|tar\.gz|tgz)$/i;
+const VDA_MAX_FILE_BYTES = 100 * 1024 * 1024;
 
 function onVdaFileChange() {
     const file = els.vdaFile.files && els.vdaFile.files[0];
+    els.vdaFileHint.classList.remove('error');
     if (!file) {
         els.vdaFileHint.textContent = 'No file selected.';
+        updateVdaDeployButton();
+        return;
+    }
+    if (!VDA_TAR_NAME_RE.test(file.name)) {
+        els.vdaFileHint.textContent = `"${file.name}" is not a .tar / .tar.gz / .tgz file. Pick a VDA tarball.`;
+        els.vdaFileHint.classList.add('error');
+        els.vdaFile.value = '';
+        updateVdaDeployButton();
+        return;
+    }
+    if (file.size > VDA_MAX_FILE_BYTES) {
+        els.vdaFileHint.textContent = `"${file.name}" is ${formatBytes(file.size)} — limit is ${formatBytes(VDA_MAX_FILE_BYTES)}.`;
+        els.vdaFileHint.classList.add('error');
+        els.vdaFile.value = '';
         updateVdaDeployButton();
         return;
     }
@@ -497,9 +647,250 @@ function updateVdaDeployButton() {
     const file = els.vdaFile.files && els.vdaFile.files[0];
     const venv = els.vdaVenvVersion.value.trim();
     const emqx = els.vdaEmqxHost.value.trim();
-    const section = els.vdaBotSection.value;
-    els.vdaDeployBtn.disabled = !(file && venv && emqx && section);
+    const hasSelections = Object.values(state.vdaSelections || {}).some(s => s.size > 0);
+    els.vdaDeployBtn.disabled = !(file && venv && emqx && hasSelections);
 }
+
+// ---------------------------------------------------------------------------
+// Bot maintenance widget
+// ---------------------------------------------------------------------------
+
+function updateMtCard() {
+    const site = state.selectedSite;
+    const configured = !!(site && site.butlerIp && site.targetIp && site.hasGorPassword);
+    if (!configured) {
+        els.mtHint.textContent = 'Select a configured site and load inventory above.';
+        els.mtForm.hidden = true;
+        return;
+    }
+    if (!state.vdaSections) {
+        els.mtHint.textContent = 'Load inventory above first.';
+        els.mtForm.hidden = true;
+        return;
+    }
+    els.mtHint.textContent = '';
+    els.mtForm.hidden = false;
+}
+
+function populateMtSectionSelect() {
+    els.mtSection.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Choose a section…';
+    els.mtSection.append(placeholder);
+    const sections = Object.keys(state.vdaSections || {}).sort();
+    for (const name of sections) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        const ips = state.vdaSections[name] || [];
+        opt.textContent = `${name}  (${ips.length} bots)`;
+        els.mtSection.append(opt);
+    }
+    els.mtSection.disabled = sections.length === 0;
+    els.mtSection.value = '';
+    renderMtIpCheckboxes(null);
+}
+
+function onMtSectionChange() {
+    renderMtIpCheckboxes(els.mtSection.value || null);
+    updateMtRunButton();
+}
+
+function renderMtIpCheckboxes(sectionName) {
+    els.mtIpsList.replaceChildren();
+    if (!sectionName || !state.vdaSections || !state.vdaSections[sectionName]) {
+        els.mtIpsWrap.hidden = true;
+        return;
+    }
+    const ips = state.vdaSections[sectionName].slice().sort((a, b) => ipSortKey(a.ip) - ipSortKey(b.ip));
+    if (ips.length === 0) {
+        els.mtIpsWrap.hidden = false;
+        const note = document.createElement('p');
+        note.className = 'muted small';
+        note.textContent = 'No bots listed in this section.';
+        els.mtIpsList.append(note);
+        return;
+    }
+    els.mtIpsWrap.hidden = false;
+    const selectedSet = state.mtSelections[sectionName] || new Set();
+    for (const { ip, active } of ips) {
+        const label = document.createElement('label');
+        label.className = 'vda-ip-row';
+        if (active) label.classList.add('vda-ip-currently-active');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = ip;
+        cb.checked = selectedSet.has(ip);
+        cb.addEventListener('change', () => onMtIpToggle(sectionName, ip, cb.checked));
+        const span = document.createElement('span');
+        const botId = state.vdaIpToBot[ip];
+        const idPart = botId ? ` (bot ${botId})` : '';
+        const activePart = active ? ' • currently active' : '';
+        span.textContent = ip + idPart + activePart;
+        label.append(cb, span);
+        els.mtIpsList.append(label);
+    }
+}
+
+function onMtIpToggle(sectionName, ip, checked) {
+    if (!state.mtSelections[sectionName]) state.mtSelections[sectionName] = new Set();
+    if (checked) state.mtSelections[sectionName].add(ip);
+    else {
+        state.mtSelections[sectionName].delete(ip);
+        if (state.mtSelections[sectionName].size === 0) delete state.mtSelections[sectionName];
+    }
+    renderMtBasket();
+    updateMtRunButton();
+}
+
+function setAllMtIpCheckboxes(checked) {
+    const sectionName = els.mtSection.value;
+    if (!sectionName || !state.vdaSections[sectionName]) return;
+    if (!state.mtSelections[sectionName]) state.mtSelections[sectionName] = new Set();
+    for (const { ip } of state.vdaSections[sectionName]) {
+        if (checked) state.mtSelections[sectionName].add(ip);
+        else state.mtSelections[sectionName].delete(ip);
+    }
+    if (!checked) delete state.mtSelections[sectionName];
+    renderMtIpCheckboxes(sectionName);
+    renderMtBasket();
+    updateMtRunButton();
+}
+
+function clearAllMtSelections() {
+    state.mtSelections = {};
+    const sectionName = els.mtSection.value;
+    if (sectionName) renderMtIpCheckboxes(sectionName);
+    renderMtBasket();
+    updateMtRunButton();
+}
+
+function renderMtBasket() {
+    els.mtBasket.replaceChildren();
+    const entries = Object.entries(state.mtSelections).filter(([, s]) => s.size > 0);
+    if (entries.length === 0) {
+        els.mtBasket.textContent = 'No bots selected yet.';
+        els.mtBasketSummary.textContent = '';
+        els.mtBasketClear.disabled = true;
+        return;
+    }
+    els.mtBasketClear.disabled = false;
+    let total = 0;
+    entries.sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [section, ipSet] of entries) {
+        total += ipSet.size;
+        const row = document.createElement('div');
+        row.className = 'vda-basket-row';
+        const header = document.createElement('div');
+        header.className = 'vda-basket-row-header';
+        const sectionLabel = document.createElement('strong');
+        sectionLabel.textContent = `${section} (${ipSet.size})`;
+        const removeAll = document.createElement('button');
+        removeAll.type = 'button';
+        removeAll.className = 'btn-subtle btn-small';
+        removeAll.textContent = 'remove section';
+        removeAll.addEventListener('click', () => {
+            delete state.mtSelections[section];
+            if (els.mtSection.value === section) renderMtIpCheckboxes(section);
+            renderMtBasket();
+            updateMtRunButton();
+        });
+        header.append(sectionLabel, removeAll);
+        row.append(header);
+        const chips = document.createElement('div');
+        chips.className = 'vda-chips';
+        const ipsSorted = Array.from(ipSet).sort((a, b) => ipSortKey(a) - ipSortKey(b));
+        for (const ip of ipsSorted) {
+            const chip = document.createElement('span');
+            chip.className = 'vda-chip';
+            const botId = state.vdaIpToBot[ip];
+            chip.textContent = botId ? `${ip} (bot ${botId})` : ip;
+            const x = document.createElement('button');
+            x.type = 'button';
+            x.className = 'vda-chip-x';
+            x.textContent = '×';
+            x.title = 'Remove';
+            x.addEventListener('click', () => onMtIpToggle(section, ip, false));
+            chip.append(x);
+            chips.append(chip);
+        }
+        row.append(chips);
+        els.mtBasket.append(row);
+    }
+    els.mtBasketSummary.textContent = `${total} bot${total !== 1 ? 's' : ''} across ${entries.length} section${entries.length !== 1 ? 's' : ''}`;
+}
+
+function updateMtRunButton() {
+    const hasSelections = Object.values(state.mtSelections || {}).some(s => s.size > 0);
+    els.mtRunBtn.disabled = !hasSelections;
+}
+
+async function onMtRun() {
+    const site = state.selectedSite;
+    if (!site) return;
+    const command = els.mtCommand.value;
+    const selectionsObj = {};
+    let total = 0;
+    for (const [section, ipSet] of Object.entries(state.mtSelections || {})) {
+        if (ipSet.size > 0) {
+            selectionsObj[section] = Array.from(ipSet);
+            total += ipSet.size;
+        }
+    }
+    if (total === 0) return;
+    const confirmed = window.confirm(
+        `Run "${command}" on ${total} bot${total !== 1 ? 's' : ''} of ${site.name}?\n\n`
+        + `Sections: ${Object.keys(selectionsObj).join(', ')}\n\n`
+        + `All other operations will be disabled while it runs.`
+    );
+    if (!confirmed) return;
+
+    setOpsBusy(true);
+    const startedAt = Date.now();
+    const tick = setInterval(() => {
+        const secs = Math.floor((Date.now() - startedAt) / 1000);
+        const mm = String(Math.floor(secs / 60)).padStart(2, '0');
+        const ss = String(secs % 60).padStart(2, '0');
+        els.mtStatus.textContent = `Running ${command} — elapsed ${mm}:${ss}. All other ops disabled.`;
+    }, 1000);
+    els.mtOutput.hidden = false;
+    els.mtOutput.textContent = `Running ${command} on ${total} bot${total !== 1 ? 's' : ''}…`;
+    try {
+        const res = await fetch('/api/operations/bot/run', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ site: site.name, command, selections: selectionsObj })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            els.mtOutput.textContent = `Error: ${body.error || res.statusText}`;
+            return;
+        }
+        const lines = [];
+        lines.push(`command: ${body.command}`);
+        lines.push(`bots: ${body.results.length}    elapsed: ${(body.elapsedMs / 1000).toFixed(1)}s`);
+        lines.push('');
+        for (const r of body.results) {
+            lines.push(`────── ${r.section}  ${r.ip}:${r.port}  ${r.code === 0 ? 'OK' : 'FAILED (exit ' + r.code + ')'} ──────`);
+            if (r.stdout) lines.push(r.stdout.trimEnd());
+            if (r.stderr) lines.push('[stderr] ' + r.stderr.trimEnd());
+            if (!r.stdout && !r.stderr) lines.push('(no output)');
+            lines.push('');
+        }
+        els.mtOutput.textContent = lines.join('\n');
+    } catch (err) {
+        els.mtOutput.textContent = 'Error: ' + err.message;
+    } finally {
+        clearInterval(tick);
+        els.mtStatus.textContent = '';
+        setOpsBusy(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ops busy lockdown
+// ---------------------------------------------------------------------------
 
 function setOpsBusy(busy) {
     state.opsBusy = busy;
@@ -509,13 +900,16 @@ function setOpsBusy(busy) {
         els.fieldsMenuBtn, els.colMenuBtn, els.load, els.exportBtn,
         els.runAliasBtn, els.pingBotBtn,
         els.vdaLoadBtn, els.vdaFile, els.vdaVenvVersion, els.vdaEmqxHost,
-        els.vdaBotSection, els.vdaIpsAll, els.vdaIpsNone, els.vdaDeployBtn
+        els.vdaBotSection, els.vdaIpsAll, els.vdaIpsNone, els.vdaBasketClear, els.vdaDeployBtn,
+        els.mtSection, els.mtCommand, els.mtIpsAll, els.mtIpsNone, els.mtBasketClear, els.mtRunBtn
     ];
     if (busy) {
         controls.forEach(el => { if (el) el.disabled = true; });
         els.vdaIpsList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.disabled = true; });
+        els.mtIpsList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.disabled = true; });
     } else {
         els.vdaIpsList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.disabled = false; });
+        els.mtIpsList.querySelectorAll('input[type=checkbox]').forEach(cb => { cb.disabled = false; });
         if (els.site) els.site.disabled = false;
         if (els.bot) els.bot.disabled = !(state.bots && state.bots.length);
         if (els.lookback) els.lookback.disabled = false;
@@ -530,9 +924,14 @@ function setOpsBusy(busy) {
         if (els.vdaBotSection) els.vdaBotSection.disabled = !state.vdaSections;
         if (els.vdaIpsAll) els.vdaIpsAll.disabled = false;
         if (els.vdaIpsNone) els.vdaIpsNone.disabled = false;
+        if (els.mtSection) els.mtSection.disabled = !state.vdaSections;
+        if (els.mtCommand) els.mtCommand.disabled = false;
+        if (els.mtIpsAll) els.mtIpsAll.disabled = false;
+        if (els.mtIpsNone) els.mtIpsNone.disabled = false;
         updateLoadButton();
         updateOpsCard();
         updateVdaDeployButton();
+        updateMtRunButton();
     }
 }
 
@@ -548,14 +947,26 @@ async function onVdaDeploy() {
     }
     const venv = els.vdaVenvVersion.value.trim();
     const emqx = els.vdaEmqxHost.value.trim();
-    const section = els.vdaBotSection.value;
-    const activeIps = collectActiveIps();
+    const selectionsObj = {};
+    let totalIps = 0;
+    for (const [section, ipSet] of Object.entries(state.vdaSelections || {})) {
+        if (ipSet.size > 0) {
+            const arr = Array.from(ipSet);
+            selectionsObj[section] = arr;
+            totalIps += arr.length;
+        }
+    }
+    if (totalIps === 0) return;
+    const breakdown = Object.entries(selectionsObj)
+        .map(([s, ips]) => `  ${s}: ${ips.length} bot${ips.length !== 1 ? 's' : ''}`)
+        .join('\n');
     const confirmed = window.confirm(
         `Deploy ${file.name} to ${site.name}?\n\n`
-        + `Section: ${section}\n`
-        + `Active bots: ${activeIps.length}\n`
+        + `${breakdown}\n`
+        + `Total: ${totalIps} bots across ${Object.keys(selectionsObj).length} sections\n`
         + `venv_version: ${venv}\n`
         + `emqx_mqtt_host: ${emqx}\n\n`
+        + `All other sections will be commented out.\n`
         + `This runs bash vda_deploy.sh on the target and may take several minutes.\n`
         + `All other operations will be disabled while it runs.`
     );
@@ -565,8 +976,7 @@ async function onVdaDeploy() {
     fd.append('site', site.name);
     fd.append('venvVersion', venv);
     fd.append('emqxMqttHost', emqx);
-    fd.append('botSection', section);
-    fd.append('activeIps', JSON.stringify(activeIps));
+    fd.append('selections', JSON.stringify(selectionsObj));
     fd.append('tar', file);
 
     setOpsBusy(true);

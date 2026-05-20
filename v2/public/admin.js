@@ -36,6 +36,7 @@ const els = {
     siteButlerIp: $('#site-butler-ip'),
     siteTargetIp: $('#site-target-ip'),
     siteGorPassword: $('#site-gor-password'),
+    siteBotSudoPassword: $('#site-bot-sudo-password'),
     siteSave: $('#site-save'),
     siteCancel: $('#site-cancel'),
     siteError: $('#site-error'),
@@ -319,6 +320,8 @@ function openSiteModal(site) {
         els.siteTargetIp.value = site.targetIp || '';
         els.siteGorPassword.value = '';
         els.siteGorPassword.placeholder = site.hasGorPassword ? 'Leave blank to keep existing password' : 'Set a password';
+        els.siteBotSudoPassword.value = '';
+        els.siteBotSudoPassword.placeholder = site.hasBotSudoPassword ? 'Leave blank to keep existing override' : 'Leave blank to reuse gor password';
     } else {
         els.siteModalTitle.textContent = 'Add site';
         els.siteOriginalName.value = '';
@@ -338,6 +341,8 @@ function openSiteModal(site) {
         els.siteTargetIp.value = '';
         els.siteGorPassword.value = '';
         els.siteGorPassword.placeholder = 'Set a password';
+        els.siteBotSudoPassword.value = '';
+        els.siteBotSudoPassword.placeholder = 'Leave blank to reuse gor password';
     }
     els.siteAlertDowWrap.hidden = els.siteAlertFrequency.value !== 'weekly';
     els.siteModal.hidden = false;
@@ -372,6 +377,8 @@ async function onSiteSave(e) {
     };
     const gorPwd = els.siteGorPassword.value;
     if (gorPwd) payload.gorPassword = gorPwd;
+    const sudoPwd = els.siteBotSudoPassword.value;
+    if (sudoPwd) payload.botSudoPassword = sudoPwd;
     try {
         els.siteSave.disabled = true;
         if (editing) {

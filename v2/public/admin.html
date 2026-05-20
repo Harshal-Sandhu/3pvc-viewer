@@ -166,7 +166,11 @@
                 </label>
                 <label>gor password
                     <input type="password" id="site-gor-password" placeholder="Leave blank to keep existing" autocomplete="new-password">
-                    <span class="hint">Stored server-side in <code>sites.json</code>. Never returned by the API. Blank on edit = keep existing.</span>
+                    <span class="hint">SSH password for <code>gor@</code> on the site server and on each bot. Stored server-side. Blank on edit = keep existing.</span>
+                </label>
+                <label>Bot sudo password (optional)
+                    <input type="password" id="site-bot-sudo-password" placeholder="Leave blank to reuse gor password" autocomplete="new-password">
+                    <span class="hint">Only set this if the sudo password on bots differs from the SSH password (e.g. <code>apj@0702</code>). If blank, the gor password is used.</span>
                 </label>
             </div>
             <div class="form-actions">

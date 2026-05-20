@@ -578,40 +578,119 @@ kbd {
 
 .vda-ips-list {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-    gap: 0.25rem 0.75rem;
+    grid-template-columns: repeat(auto-fill, minmax(195px, 1fr));
+    gap: 0.3rem 0.75rem;
     margin-top: 0.5rem;
-    max-height: 18rem;
+    max-height: 22rem;
     overflow: auto;
-    padding: 0.5rem;
-    border: 1px solid var(--border, #d0d4dc);
-    border-radius: 4px;
+    padding: 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
 }
 .vda-ip-row {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.45rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 0.8rem;
+    font-size: 0.82rem;
+    color: var(--text);
+    margin: 0;
+    padding: 0.15rem 0.25rem;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.vda-ip-row:hover {
+    background: var(--panel-2);
+}
+.vda-ip-row input[type="checkbox"] {
+    accent-color: var(--accent);
+    width: 14px;
+    height: 14px;
     margin: 0;
 }
 .vda-ip-row.vda-ip-currently-active span {
-    color: var(--ok, #2e7d32);
+    color: var(--ok);
+    font-weight: 600;
+}
+.vda-basket {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.6rem;
+    margin-top: 0.5rem;
+    min-height: 2.5rem;
+    max-height: 18rem;
+    overflow: auto;
+    background: var(--bg);
+    color: var(--text);
+}
+.vda-basket-row {
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--border);
+}
+.vda-basket-row:last-child {
+    border-bottom: none;
+}
+.vda-basket-row-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.4rem;
+}
+.vda-basket-row-header strong {
+    color: var(--accent);
+    font-size: 0.9rem;
+}
+.vda-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+.vda-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: var(--panel-2);
+    border: 1px solid var(--accent);
+    border-radius: 14px;
+    padding: 0.18rem 0.45rem 0.18rem 0.7rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    color: var(--text);
+}
+.vda-chip-x {
+    background: transparent;
+    border: none;
+    padding: 0 0.2rem;
+    cursor: pointer;
+    font-size: 1.05rem;
+    line-height: 1;
+    color: var(--muted);
+}
+.vda-chip-x:hover {
+    color: var(--bad);
+}
+#vda-basket-summary {
+    margin-right: 0.5rem;
+    color: var(--accent);
+    font-weight: 600;
+}
+.form-grid .hint.error {
+    color: var(--bad);
+    font-style: normal;
+    font-weight: 600;
 }
 body.ops-busy .controls,
 body.ops-busy #site-ops-card,
 body.ops-busy #vda-deploy-card #vda-form,
-body.ops-busy #vda-deploy-card .card-head {
+body.ops-busy #vda-deploy-card .card-head,
+body.ops-busy #bot-maintenance-card #mt-form,
+body.ops-busy #bot-maintenance-card .card-head {
     opacity: 0.55;
 }
-body.ops-busy #vda-deploy-status {
+body.ops-busy #vda-deploy-status,
+body.ops-busy #mt-status {
     opacity: 1;
     font-weight: 600;
-}
-.btn-danger {
-    background: #c0392b;
-    color: #fff;
-}
-.btn-danger:disabled {
-    background: #c0392b88;
+    color: var(--accent);
 }

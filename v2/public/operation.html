@@ -127,10 +127,18 @@
                 <div id="vda-ips-wrap" style="margin-top:0.75rem;" hidden>
                     <div class="table-toolbar" style="padding:0;">
                         <strong style="margin-right:auto;">Bots in this section</strong>
-                        <button type="button" id="vda-ips-all" class="btn-subtle btn-small">Select all</button>
-                        <button type="button" id="vda-ips-none" class="btn-subtle btn-small">Select none</button>
+                        <button type="button" id="vda-ips-all" class="btn-subtle btn-small">Select all (this section)</button>
+                        <button type="button" id="vda-ips-none" class="btn-subtle btn-small">Clear (this section)</button>
                     </div>
                     <div id="vda-ips-list" class="vda-ips-list"></div>
+                </div>
+                <div id="vda-basket-wrap" style="margin-top:0.75rem;">
+                    <div class="table-toolbar" style="padding:0;">
+                        <strong style="margin-right:auto;">Selected for deploy</strong>
+                        <span id="vda-basket-summary" class="muted small"></span>
+                        <button type="button" id="vda-basket-clear" class="btn-subtle btn-small">Clear all</button>
+                    </div>
+                    <div id="vda-basket" class="vda-basket">No bots selected yet.</div>
                 </div>
                 <div class="form-actions" style="margin-top:0.75rem;">
                     <button type="button" id="vda-deploy-btn" class="btn-danger" disabled>Deploy VDA</button>
@@ -138,6 +146,57 @@
                 </div>
             </div>
             <pre id="vda-output" class="ops-output" hidden></pre>
+        </section>
+
+        <section class="card" id="bot-maintenance-card">
+            <div class="card-head">
+                <h2 class="card-title">Bot maintenance</h2>
+            </div>
+            <p class="muted small" style="margin:0 0 0.75rem;">
+                Run a maintenance command (<code>vdarestart</code>, <code>vdastop</code>,
+                <code>vdastart</code>, <code>savelog</code>) on selected bots.
+                Reuses the inventory loaded above.
+            </p>
+            <p id="mt-hint" class="muted small" style="margin:0 0 0.75rem;">Load inventory above first.</p>
+            <div id="mt-form" hidden>
+                <div class="form-grid">
+                    <label>Bot section
+                        <select id="mt-section" disabled>
+                            <option value="">Load inventory first…</option>
+                        </select>
+                    </label>
+                    <label>Command
+                        <select id="mt-command">
+                            <option value="vdarestart">vdarestart — sudo systemctl restart vda_remote</option>
+                            <option value="vdastop">vdastop — sudo systemctl stop vda_remote</option>
+                            <option value="vdastart">vdastart — sudo systemctl start vda_remote</option>
+                            <option value="savelog">savelog — bash /home/gor/save_all_logs_ttp.sh</option>
+                        </select>
+                        <span class="hint">Same alias commands defined on the bots.</span>
+                    </label>
+                </div>
+                <div id="mt-ips-wrap" style="margin-top:0.75rem;" hidden>
+                    <div class="table-toolbar" style="padding:0;">
+                        <strong style="margin-right:auto;">Bots in this section</strong>
+                        <button type="button" id="mt-ips-all" class="btn-subtle btn-small">Select all (this section)</button>
+                        <button type="button" id="mt-ips-none" class="btn-subtle btn-small">Clear (this section)</button>
+                    </div>
+                    <div id="mt-ips-list" class="vda-ips-list"></div>
+                </div>
+                <div style="margin-top:0.75rem;">
+                    <div class="table-toolbar" style="padding:0;">
+                        <strong style="margin-right:auto;">Selected for command</strong>
+                        <span id="mt-basket-summary" class="muted small"></span>
+                        <button type="button" id="mt-basket-clear" class="btn-subtle btn-small">Clear all</button>
+                    </div>
+                    <div id="mt-basket" class="vda-basket">No bots selected yet.</div>
+                </div>
+                <div class="form-actions" style="margin-top:0.75rem;">
+                    <button type="button" id="mt-run-btn" class="btn-danger" disabled>Run command on selected bots</button>
+                    <span id="mt-status" class="muted small"></span>
+                </div>
+            </div>
+            <pre id="mt-output" class="ops-output" hidden></pre>
         </section>
 
         <section class="card">

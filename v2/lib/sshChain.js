@@ -162,4 +162,16 @@ async function writeRemoteFile(opts, remotePath, content) {
     }
 }
 
-module.exports = { runOnSiteServer, readRemoteFile, writeRemoteFile };
+// Run a shell command on an individual bot reached via the site server:
+//   v2 -> jumper -> butler -> site server -> bot (gor@<botIp>:<botPort>)
+// Re-uses opts.gorPassword as the bot password (same shared default).
+async function runOnBot(opts, { botIp, botPort = 22, command, botUser = 'gor', timeoutMs } = {}) {
+    if (!botIp) throw new Error('botIp is required');
+    if (!command) throw new Error('command is required');
+    const inner = `SSHPASS=${shellQuote(opts.gorPassword)} sshpass -e `
+        + `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 `
+        + `-p ${botPort} ${botUser}@${botIp} ${shellQuote(command)}`;
+    return runOnSiteServer({ ...opts, command: inner, timeoutMs });
+}
+
+module.exports = { runOnSiteServer, runOnBot, readRemoteFile, writeRemoteFile };

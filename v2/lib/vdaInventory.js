@@ -35,6 +35,44 @@ function parseInventory(text) {
     return sections;
 }
 
+function applyMultiSectionActiveIps(text, selections) {
+    const activeBy = {};
+    for (const [section, ips] of Object.entries(selections || {})) {
+        activeBy[section] = new Set(ips);
+    }
+    const out = [];
+    const lines = String(text || '').split('\n');
+    let inAnySection = false;
+    let currentSection = null;
+    let isMeta = false;
+    for (const raw of lines) {
+        const m = raw.match(SECTION_HEADER_RE);
+        if (m) {
+            inAnySection = true;
+            currentSection = m[1];
+            isMeta = isMetaSection(currentSection);
+            out.push(raw);
+            continue;
+        }
+        if (!currentSection || isMeta) {
+            out.push(raw);
+            continue;
+        }
+        const trimmed = raw.trim();
+        if (!trimmed) { out.push(raw); continue; }
+        const commented = trimmed.startsWith('#');
+        const ip = (commented ? trimmed.slice(1) : trimmed).trim();
+        if (!IP_RE.test(ip)) {
+            out.push(raw);
+            continue;
+        }
+        const set = activeBy[currentSection];
+        out.push(set && set.has(ip) ? ip : '#' + ip);
+    }
+    if (!inAnySection) throw new Error('Inventory has no section headers');
+    return out.join('\n');
+}
+
 function applyActiveIps(text, sectionName, activeIps) {
     const activeSet = new Set(activeIps);
     const out = [];
@@ -95,4 +133,29 @@ function updateGroupVars(text, updates) {
     return out.join('\n');
 }
 
-module.exports = { parseInventory, applyActiveIps, updateGroupVars };
+function parseInventoryPorts(text) {
+    const lines = String(text || '').split('\n');
+    const ports = {};
+    let currentVarsFor = null;
+    for (const raw of lines) {
+        const varsHeader = raw.match(/^\[([a-zA-Z0-9_]+):vars\]\s*$/);
+        if (varsHeader) {
+            currentVarsFor = varsHeader[1];
+            continue;
+        }
+        const sectionHeader = raw.match(SECTION_HEADER_RE);
+        if (sectionHeader && !sectionHeader[1].includes(':')) {
+            currentVarsFor = null;
+            continue;
+        }
+        if (currentVarsFor) {
+            const portMatch = raw.match(/^\s*ansible_port\s*=\s*(\d+)\s*$/);
+            if (portMatch) {
+                ports[currentVarsFor] = parseInt(portMatch[1], 10);
+            }
+        }
+    }
+    return ports;
+}
+
+module.exports = { parseInventory, parseInventoryPorts, applyActiveIps, applyMultiSectionActiveIps, updateGroupVars };
