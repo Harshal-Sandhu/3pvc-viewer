@@ -46,6 +46,8 @@ const els = {
     vdaForm: $('#vda-form'),
     vdaFile: $('#vda-file'),
     vdaFileHint: $('#vda-file-hint'),
+    vdaExistingTar: $('#vda-existing-tar'),
+    vdaExistingTarHint: $('#vda-existing-tar-hint'),
     vdaVersion: $('#vda-vda-version'),
     vdaEmqxHost: $('#vda-emqx-host'),
     vdaBotSection: $('#vda-bot-section'),
@@ -284,6 +286,7 @@ function wireEvents() {
 
     els.vdaLoadBtn.addEventListener('click', onVdaLoadInventory);
     els.vdaFile.addEventListener('change', onVdaFileChange);
+    els.vdaExistingTar.addEventListener('change', onVdaExistingTarChange);
     els.vdaVersion.addEventListener('input', updateVdaDeployButton);
     els.vdaEmqxHost.addEventListener('input', updateVdaDeployButton);
     els.vdaBotSection.addEventListener('change', onVdaSectionChange);
@@ -428,6 +431,7 @@ async function onVdaLoadInventory() {
         const r = await api(`/api/operations/vda/inventory?site=${encodeURIComponent(site.name)}`);
         state.vdaSections = r.sections || {};
         state.vdaIpToBot = r.ipToBot || {};
+        state.vdaIpToVersion = r.ipToVersion || {};
         state.vdaSelections = {};
         state.mtSelections = {};
         populateBotSectionSelect();
@@ -436,15 +440,28 @@ async function onVdaLoadInventory() {
         renderMtBasket();
         updateVdaCard();
         updateMtCard();
+        state.vdaBuildLocation = r.buildLocation || '';
+        state.vdaTarListMode = r.tarListMode || 'tar-files';
+        populateExistingTarSelect(r.tarFiles || [], r.buildLocation || '', state.vdaTarListMode);
+        if (r.groupVars && r.groupVars.emqx_mqtt_host && !els.vdaEmqxHost.value) {
+            els.vdaEmqxHost.value = r.groupVars.emqx_mqtt_host;
+        }
+        if (r.groupVars && r.groupVars.vda_remote_version && !els.vdaVersion.value) {
+            els.vdaVersion.value = r.groupVars.vda_remote_version;
+        }
     } catch (err) {
         els.vdaHint.textContent = 'Failed to load inventory: ' + err.message;
         state.vdaSections = null;
         state.vdaIpToBot = {};
+        state.vdaIpToVersion = {};
         state.vdaSelections = {};
         state.mtSelections = {};
         renderBasket();
         renderMtBasket();
         updateMtCard();
+        state.vdaBuildLocation = '';
+        state.vdaTarListMode = 'tar-files';
+        populateExistingTarSelect([], '', 'tar-files');
     } finally {
         els.vdaLoadBtn.disabled = false;
         els.vdaLoadBtn.textContent = originalLabel;
@@ -508,9 +525,11 @@ function renderIpCheckboxes(sectionName) {
         cb.addEventListener('change', () => onIpToggle(sectionName, ip, cb.checked));
         const span = document.createElement('span');
         const botId = state.vdaIpToBot[ip];
+        const version = (state.vdaIpToVersion || {})[ip];
         const idPart = botId ? ` (bot ${botId})` : '';
+        const verPart = version ? ` • ${version}` : ' • —';
         const activePart = active ? ' • currently active' : '';
-        span.textContent = ip + idPart + activePart;
+        span.textContent = ip + idPart + verPart + activePart;
         label.append(cb, span);
         els.vdaIpsList.append(label);
     }
@@ -555,6 +574,7 @@ function clearAllSelections() {
 // starts from a clean slate. Loaded inventory (sections, IPs) is preserved.
 function resetVdaForm() {
     els.vdaFile.value = '';
+    if (els.vdaExistingTar) els.vdaExistingTar.value = '';
     els.vdaVersion.value = '';
     els.vdaEmqxHost.value = '';
     els.vdaFileHint.textContent = 'No file selected.';
@@ -621,6 +641,60 @@ function renderBasket() {
 const VDA_TAR_NAME_RE = /\.(tar|tar\.gz|tgz)$/i;
 const VDA_MAX_FILE_BYTES = 100 * 1024 * 1024;
 
+// Populate the existing-tar dropdown after inventory load. Newest first.
+// `buildLocation` is the resolved bridge directory.
+// `mode` is 'tar-files' (RELAY) or 'release-folders' (TTP).
+function populateExistingTarSelect(tarFiles, buildLocation, mode) {
+    const sel = els.vdaExistingTar;
+    if (!sel) return;
+    const loc = buildLocation || '<bridge build dir>';
+    const isFolders = mode === 'release-folders';
+    const noun = isFolders ? 'release folder' : 'tar';
+    const nounPlural = isFolders ? 'release folders' : 'tars';
+    if (els.vdaExistingTarHint) {
+        const lookFor = isFolders
+            ? `subfolders matching <code>release*</code> in <code>${loc}</code>`
+            : `tars in <code>${loc}</code>`;
+        els.vdaExistingTarHint.innerHTML = `Pick from ${lookFor}. Clears when you pick a file below.`;
+    }
+    sel.replaceChildren();
+    if (!tarFiles || tarFiles.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = `No ${nounPlural} found under ${loc}`;
+        sel.append(opt);
+        sel.disabled = true;
+        return;
+    }
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = `— select existing ${noun} (${tarFiles.length} found) —`;
+    sel.append(placeholder);
+    for (const name of tarFiles) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        sel.append(opt);
+    }
+    sel.disabled = false;
+}
+
+// Selecting an existing tar clears the file picker (mutual exclusion) and
+// auto-fills vda_remote_version by parsing the filename.
+function onVdaExistingTarChange() {
+    const name = els.vdaExistingTar.value;
+    if (!name) {
+        updateVdaDeployButton();
+        return;
+    }
+    els.vdaFile.value = '';
+    els.vdaFileHint.textContent = 'No file selected (using existing tar).';
+    els.vdaFileHint.classList.remove('error');
+    const m = name.match(/_v([0-9]+(?:\.[0-9]+){1,3})(?:_|\.|\/|$)/);
+    if (m) els.vdaVersion.value = m[1];
+    updateVdaDeployButton();
+}
+
 function onVdaFileChange() {
     const file = els.vdaFile.files && els.vdaFile.files[0];
     els.vdaFileHint.classList.remove('error');
@@ -644,7 +718,9 @@ function onVdaFileChange() {
         return;
     }
     els.vdaFileHint.textContent = `${file.name} (${formatBytes(file.size)})`;
-    const m = file.name.match(/_v([0-9]+(?:\.[0-9]+){0,3})_/);
+    // Mutual exclusion with existing-tar dropdown.
+    els.vdaExistingTar.value = '';
+    const m = file.name.match(/_v([0-9]+(?:\.[0-9]+){1,3})(?:_|\.|\/|$)/);
     if (m && !els.vdaVersion.value) els.vdaVersion.value = m[1];
     updateVdaDeployButton();
 }
@@ -657,10 +733,11 @@ function formatBytes(n) {
 
 function updateVdaDeployButton() {
     const file = els.vdaFile.files && els.vdaFile.files[0];
+    const existingTar = els.vdaExistingTar && els.vdaExistingTar.value;
     const vdaVersion = els.vdaVersion.value.trim();
     const emqx = els.vdaEmqxHost.value.trim();
     const hasSelections = Object.values(state.vdaSelections || {}).some(s => s.size > 0);
-    els.vdaDeployBtn.disabled = !(file && vdaVersion && emqx && hasSelections);
+    els.vdaDeployBtn.disabled = !((file || existingTar) && vdaVersion && emqx && hasSelections);
 }
 
 // ---------------------------------------------------------------------------
@@ -996,7 +1073,7 @@ function setOpsBusy(busy) {
         els.site, els.bot, els.lookback, els.lookbackCustom, els.rowLimit, els.rowLimitCustom,
         els.fieldsMenuBtn, els.colMenuBtn, els.load, els.exportBtn,
         els.runAliasBtn, els.pingBotBtn,
-        els.vdaLoadBtn, els.vdaFile, els.vdaVersion, els.vdaEmqxHost,
+        els.vdaLoadBtn, els.vdaFile, els.vdaExistingTar, els.vdaVersion, els.vdaEmqxHost,
         els.vdaBotSection, els.vdaIpsAll, els.vdaIpsNone, els.vdaBasketClear, els.vdaDeployBtn,
         els.mtSection, els.mtCommand, els.mtIpsAll, els.mtIpsNone, els.mtBasketClear, els.mtRunBtn
     ];
@@ -1036,8 +1113,9 @@ async function onVdaDeploy() {
     const site = state.selectedSite;
     if (!site) return;
     const file = els.vdaFile.files && els.vdaFile.files[0];
-    if (!file) return;
-    if (file.size > 100 * 1024 * 1024) {
+    const existingTar = els.vdaExistingTar && els.vdaExistingTar.value;
+    if (!file && !existingTar) return;
+    if (file && file.size > 100 * 1024 * 1024) {
         els.vdaOutput.hidden = false;
         els.vdaOutput.textContent = 'File too large (limit 100 MB).';
         return;
@@ -1057,8 +1135,9 @@ async function onVdaDeploy() {
     const breakdown = Object.entries(selectionsObj)
         .map(([s, ips]) => `  ${s}: ${ips.length} bot${ips.length !== 1 ? 's' : ''}`)
         .join('\n');
+    const tarSourceLabel = file ? `${file.name} (upload)` : `${existingTar} (existing on bridge)`;
     const confirmed = window.confirm(
-        `Deploy ${file.name} to ${site.name}?\n\n`
+        `Deploy ${tarSourceLabel} to ${site.name}?\n\n`
         + `${breakdown}\n`
         + `Total: ${totalIps} bots across ${Object.keys(selectionsObj).length} sections\n`
         + `vda_remote_version: ${vdaVersion}\n`
@@ -1074,7 +1153,8 @@ async function onVdaDeploy() {
     fd.append('vdaRemoteVersion', vdaVersion);
     fd.append('emqxMqttHost', emqx);
     fd.append('selections', JSON.stringify(selectionsObj));
-    fd.append('tar', file);
+    if (file) fd.append('tar', file);
+    else fd.append('existingTar', existingTar);
 
     setOpsBusy(true);
     const startedAt = Date.now();

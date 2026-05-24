@@ -204,7 +204,7 @@ function getCellValue(row, col) {
     }
     if (col === STATUS_COL) {
         const { ref, diffs } = getDiffForRow(row);
-        if (!ref) return 'Unknown';
+        if (!ref) return 'Dead';
         return diffs.length === 0 ? 'Compatible' : `Incompatible (${diffs.length})`;
     }
     if (col === EXPECTED_COL) {
@@ -936,8 +936,8 @@ function renderBody(rows) {
                 pill.className = 'status-pill';
                 if (!ref) {
                     pill.classList.add('unknown');
-                    pill.textContent = 'Unknown';
-                    pill.title = 'No compliance row matches this bot\'s api_version';
+                    pill.textContent = 'Dead';
+                    pill.title = 'No api_version reported at script execution — bot considered dead';
                 } else if (diffs.length === 0) {
                     pill.classList.add('ok');
                     pill.textContent = '✓ Compatible';

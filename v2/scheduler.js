@@ -16,6 +16,7 @@ const cron = require('node-cron');
 const alerts = require('./lib/alerts');
 
 const SITES_PATH = path.join(__dirname, 'sites.json');
+const AGENT_RECIPIENTS_PATH = path.join(__dirname, 'agent-recipients.json');
 const TIMEZONE = process.env.SCHEDULER_TIMEZONE || undefined;
 
 function loadSites() {
@@ -24,6 +25,15 @@ function loadSites() {
     } catch (e) {
         console.error('Failed to read sites.json:', e.message);
         process.exit(1);
+    }
+}
+
+function loadAgentRecipients() {
+    try {
+        const raw = JSON.parse(fs.readFileSync(AGENT_RECIPIENTS_PATH, 'utf8'));
+        return { TTP: Array.isArray(raw.TTP) ? raw.TTP : [], RELAY: Array.isArray(raw.RELAY) ? raw.RELAY : [] };
+    } catch (e) {
+        return { TTP: [], RELAY: [] };
     }
 }
 
@@ -46,8 +56,11 @@ function scheduleToCron(sched) {
 
 async function runForSite(siteName, site) {
     const start = Date.now();
+    // Re-read the per-agent list every run so admin edits take effect without a restart.
+    const ar = loadAgentRecipients();
+    const extra = ar[site.agentType] || [];
     try {
-        const result = await alerts.sendReport(siteName, site);
+        const result = await alerts.sendReport(siteName, site, { agentTypeRecipients: extra });
         const ms = Date.now() - start;
         console.log(`[${new Date().toISOString()}] ${siteName}: sent to ${result.recipients.join(', ')} — ${result.totals.incompatible} incompatible / ${result.totals.total} bots (${ms}ms)`);
     } catch (err) {

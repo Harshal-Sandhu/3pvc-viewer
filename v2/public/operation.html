@@ -106,7 +106,13 @@
             <p id="vda-hint" class="muted small" style="margin:0 0 0.75rem;">Select a configured site first.</p>
             <div id="vda-form" hidden>
                 <div class="form-grid">
-                    <label>VDA tar file (.tar / .tar.gz / .tgz, &lt;100 MB)
+                    <label>Existing tar on bridge
+                        <select id="vda-existing-tar" disabled>
+                            <option value="">Load inventory first…</option>
+                        </select>
+                        <span class="hint" id="vda-existing-tar-hint">Pick a tar already on the bridge — skips the upload step. Clears when you pick a file below.</span>
+                    </label>
+                    <label>OR upload new VDA tar (.tar / .tar.gz / .tgz, &lt;100 MB)
                         <input type="file" id="vda-file" accept=".tar,.gz,.tgz,application/gzip,application/x-tar">
                         <span class="hint" id="vda-file-hint">No file selected.</span>
                     </label>

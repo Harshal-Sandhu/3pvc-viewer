@@ -44,6 +44,7 @@
                     <thead>
                         <tr>
                             <th>Name</th>
+                            <th>Agent</th>
                             <th>Host</th>
                             <th>Database</th>
                             <th>Main measurement</th>
@@ -55,6 +56,62 @@
                     <tbody id="sites-body"></tbody>
                 </table>
             </div>
+        </section>
+
+        <section class="card">
+            <div class="card-head">
+                <h2 class="card-title">Alert recipients by agent type</h2>
+            </div>
+            <p class="muted small" style="margin:0 0 0.75rem;">
+                Comma-separated email addresses. Every site with the matching <code>agentType</code> will BCC these
+                addresses on its compliance report, in addition to any per-site <em>Alert recipients</em>.
+                Each recipient receives the mail privately — the To field shows only the sender.
+            </p>
+            <form id="agent-recipients-form" autocomplete="off">
+                <fieldset style="border:1px solid var(--border);border-radius:8px;padding:0.75rem 1rem;margin-bottom:0.75rem;">
+                    <legend style="padding:0 0.4rem;font-weight:600;">TTP</legend>
+                    <p class="muted small" style="margin:0 0 0.5rem;">Sites: sams_atl, stryker, xpo_handm, essilor_luxottica_fhr, essilor_luxottica_sedico, walmart_mexico.</p>
+                    <div class="form-grid">
+                        <label>To
+                            <input type="text" id="agent-recipients-ttp-to" placeholder="primary-owner@example.com">
+                        </label>
+                        <label>CC
+                            <input type="text" id="agent-recipients-ttp-cc" placeholder="team-lead@example.com">
+                        </label>
+                        <label>BCC
+                            <input type="text" id="agent-recipients-ttp-bcc" placeholder="ttp-alerts@example.com, audit@example.com">
+                        </label>
+                    </div>
+                    <div class="form-actions" style="margin-top:0.5rem;">
+                        <button type="button" id="agent-recipients-send-ttp" class="btn-subtle">Send now for all TTP sites</button>
+                    </div>
+                </fieldset>
+                <fieldset style="border:1px solid var(--border);border-radius:8px;padding:0.75rem 1rem;margin-bottom:0.75rem;">
+                    <legend style="padding:0 0.4rem;font-weight:600;">RELAY</legend>
+                    <p class="muted small" style="margin:0 0 0.5rem;">Sites: walmartpot_staging, owen_n_minor (and any future RELAY site).</p>
+                    <div class="form-grid">
+                        <label>To
+                            <input type="text" id="agent-recipients-relay-to" placeholder="primary-owner@example.com">
+                        </label>
+                        <label>CC
+                            <input type="text" id="agent-recipients-relay-cc" placeholder="team-lead@example.com">
+                        </label>
+                        <label>BCC
+                            <input type="text" id="agent-recipients-relay-bcc" placeholder="relay-alerts@example.com">
+                        </label>
+                    </div>
+                    <div class="form-actions" style="margin-top:0.5rem;">
+                        <button type="button" id="agent-recipients-send-relay" class="btn-subtle">Send now for all RELAY sites</button>
+                    </div>
+                </fieldset>
+                <p class="muted small" style="margin:0 0 0.5rem;">
+                    Comma-separated. Leave a field blank to skip that header. If <code>To</code> is empty, the mail's
+                    To header shows just the sender (privacy-friendly default).
+                </p>
+                <div class="form-actions">
+                    <button type="submit" id="agent-recipients-save">Save</button>
+                </div>
+            </form>
         </section>
 
         <section class="card">
@@ -97,6 +154,14 @@
                 <label>Name
                     <input type="text" id="site-name" required pattern="[a-zA-Z0-9_\-]+" placeholder="e.g. acme_warehouse">
                     <span class="hint">Short identifier shown in the viewer's site dropdown. Letters, numbers, "_" or "-".</span>
+                </label>
+                <label>Site agent type
+                    <select id="site-agent-type">
+                        <option value="">— unspecified —</option>
+                        <option value="TTP">TTP</option>
+                        <option value="RELAY">RELAY</option>
+                    </select>
+                    <span class="hint">Bot agent running at this site. Used to group/distinguish sites in the viewer.</span>
                 </label>
                 <label>Host (IP or hostname)
                     <input type="text" id="site-ip" required placeholder="e.g. 192.168.1.10">

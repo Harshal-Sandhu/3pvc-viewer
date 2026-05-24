@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 const { runOnSiteServer, runOnBot, readRemoteFile, writeRemoteFile } = require('./lib/sshChain');
-const { parseInventory, parseInventoryPorts, applyActiveIps, applyMultiSectionActiveIps, updateGroupVars } = require('./lib/vdaInventory');
+const { parseInventory, parseInventoryPorts, applyActiveIps, applyMultiSectionActiveIps, updateGroupVars, parseGroupVars } = require('./lib/vdaInventory');
 const multer = require('multer');
 const os = require('os');
 const crypto = require('crypto');
@@ -43,6 +43,36 @@ try {
 } catch (e) {
     console.error('Failed to load sites.json:', e.message);
     process.exit(1);
+}
+
+// Per-agent-type recipient lists. Shared across all sites of a given agent
+// type. Shape: { TTP: { to: [], cc: [], bcc: [] }, RELAY: { to: [], cc: [], bcc: [] } }.
+// Persisted alongside sites.json. Old format `{TTP: [emails...]}` (a bare array)
+// is auto-migrated to `{ bcc: [...] }` so existing config keeps working.
+const AGENT_RECIPIENTS_PATH = path.join(__dirname, 'agent-recipients.json');
+function emptyBucket() { return { to: [], cc: [], bcc: [] }; }
+function normalizeBucket(raw) {
+    if (Array.isArray(raw)) return { to: [], cc: [], bcc: raw.filter(s => typeof s === 'string') };
+    const o = (raw && typeof raw === 'object') ? raw : {};
+    return {
+        to:  Array.isArray(o.to)  ? o.to.filter(s => typeof s === 'string')  : [],
+        cc:  Array.isArray(o.cc)  ? o.cc.filter(s => typeof s === 'string')  : [],
+        bcc: Array.isArray(o.bcc) ? o.bcc.filter(s => typeof s === 'string') : []
+    };
+}
+let agentRecipients = { TTP: emptyBucket(), RELAY: emptyBucket() };
+try {
+    const raw = JSON.parse(fs.readFileSync(AGENT_RECIPIENTS_PATH, 'utf8'));
+    for (const k of ['TTP', 'RELAY']) {
+        agentRecipients[k] = normalizeBucket(raw[k]);
+    }
+} catch (e) {
+    if (e.code !== 'ENOENT') console.error('Failed to load agent-recipients.json:', e.message);
+}
+function saveAgentRecipients() {
+    const tmp = AGENT_RECIPIENTS_PATH + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(agentRecipients, null, 2));
+    fs.renameSync(tmp, AGENT_RECIPIENTS_PATH);
 }
 
 for (const [name, s] of Object.entries(sites)) {
@@ -196,10 +226,14 @@ function siteToPublic(name, s) {
         alertSchedule: normalizeSchedule(s.alertSchedule),
         butlerIp: s.butlerIp || '',
         targetIp: s.targetIp || '',
+        gpmsBridgeIp: s.gpmsBridgeIp || '',
+        agentType: s.agentType || '',
         hasGorPassword: !!s.gorPassword,
         hasBotSudoPassword: !!s.botSudoPassword
     };
 }
+
+const VALID_AGENT_TYPES = new Set(['', 'TTP', 'RELAY']);
 
 function normalizeSchedule(sched) {
     const s = sched && typeof sched === 'object' ? sched : {};
@@ -250,8 +284,115 @@ app.get('/api/sites', requireAuth, (req, res) => {
     res.json(Object.entries(sites).map(([name, s]) => siteToPublic(name, s)));
 });
 
+// Per-agent-type recipient lists (shared by every site with that agentType).
+// Anyone authenticated can read; only admin can update.
+app.get('/api/agent-recipients', requireAuth, (req, res) => {
+    res.json(agentRecipients);
+});
+
+app.put('/api/agent-recipients', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    if (typeof body !== 'object' || Array.isArray(body)) {
+        return res.status(400).json({ error: 'Body must be {TTP:{to:[],cc:[],bcc:[]}, RELAY:{...}}' });
+    }
+    const next = {
+        TTP:   { ...agentRecipients.TTP },
+        RELAY: { ...agentRecipients.RELAY }
+    };
+    for (const agent of ['TTP', 'RELAY']) {
+        if (body[agent] === undefined) continue;
+        const bucket = body[agent];
+        // Backward-compat: bare array means "bcc" only.
+        if (Array.isArray(bucket)) {
+            const check = validateRecipients(bucket);
+            if (!check.ok) return res.status(400).json({ error: `${agent}: ${check.error}` });
+            next[agent] = { to: [], cc: [], bcc: check.value };
+            continue;
+        }
+        if (!bucket || typeof bucket !== 'object') continue;
+        const fresh = { to: next[agent].to, cc: next[agent].cc, bcc: next[agent].bcc };
+        for (const field of ['to', 'cc', 'bcc']) {
+            if (bucket[field] === undefined) continue;
+            const check = validateRecipients(bucket[field]);
+            if (!check.ok) return res.status(400).json({ error: `${agent}.${field}: ${check.error}` });
+            fresh[field] = check.value;
+        }
+        next[agent] = fresh;
+    }
+    agentRecipients = next;
+    try {
+        saveAgentRecipients();
+    } catch (err) {
+        console.error('Failed to persist agent-recipients.json:', err);
+        return res.status(500).json({ error: 'Failed to save' });
+    }
+    res.json({ ok: true, agentRecipients });
+});
+
 app.get('/api/compliance-fields', requireAuth, (req, res) => {
     res.json(COMPLIANCE_FIELDS);
+});
+
+// Per-site compliance fields, discovered live from InfluxDB.
+// Runs SHOW FIELD KEYS + SHOW TAG KEYS against the site's bot measurement
+// (compliance records have the same shape as bot data). 60s memo to keep
+// admin form snappy without hammering Influx.
+const SITE_COLUMNS_CACHE = new Map();
+const SITE_COLUMNS_TTL_MS = 60 * 1000;
+
+async function influxShow(s, q) {
+    const url = `http://${s.ip}:${s.port}/query?db=${encodeURIComponent(s.db)}&q=${encodeURIComponent(q)}`;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 10000);
+    try {
+        const r = await fetch(url, { signal: ac.signal });
+        if (!r.ok) throw new Error(`InfluxDB HTTP ${r.status}`);
+        return await r.json();
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+function extractShowKeys(json, keyName) {
+    const series = json && json.results && json.results[0] && json.results[0].series && json.results[0].series[0];
+    if (!series) return [];
+    const idx = series.columns.indexOf(keyName);
+    if (idx === -1) return [];
+    return (series.values || []).map(row => row[idx]).filter(Boolean);
+}
+
+async function fetchSiteColumns(siteName) {
+    const cached = SITE_COLUMNS_CACHE.get(siteName);
+    if (cached && Date.now() - cached.at < SITE_COLUMNS_TTL_MS) return cached.columns;
+    const s = sites[siteName];
+    if (!s) throw new Error('Unknown site');
+    const measurement = s.measurement || 'bot_firmware_version_details';
+    const fq = `SHOW FIELD KEYS FROM "${measurement.replace(/"/g, '')}"`;
+    const tq = `SHOW TAG KEYS FROM "${measurement.replace(/"/g, '')}"`;
+    const [fieldsJson, tagsJson] = await Promise.all([influxShow(s, fq), influxShow(s, tq)]);
+    const set = new Set();
+    for (const k of extractShowKeys(fieldsJson, 'fieldKey')) set.add(k);
+    for (const k of extractShowKeys(tagsJson, 'tagKey')) set.add(k);
+    const columns = Array.from(set).sort();
+    SITE_COLUMNS_CACHE.set(siteName, { columns, at: Date.now() });
+    return columns;
+}
+
+app.get('/api/compliance-fields/:site', requireAuth, async (req, res) => {
+    const { site } = req.params;
+    if (!sites[site]) return res.status(404).json({ error: 'Unknown site' });
+    try {
+        const columns = await fetchSiteColumns(site);
+        if (columns.length === 0) {
+            // Site has no data yet — fall back to legacy global list so admin
+            // can still enter the first compliance record.
+            return res.json({ columns: COMPLIANCE_FIELDS, source: 'fallback' });
+        }
+        res.json({ columns, source: 'discovered' });
+    } catch (err) {
+        const msg = err.name === 'AbortError' ? 'InfluxDB timed out' : err.message;
+        res.status(502).json({ error: 'Could not read site columns: ' + msg });
+    }
 });
 
 function saveSites() {
@@ -306,6 +447,12 @@ function validateSiteFields(body, { allowName = false } = {}) {
     if (body.botSudoPassword != null && body.botSudoPassword !== '') {
         if (typeof body.botSudoPassword !== 'string' || body.botSudoPassword.length > 256) errors.push('botSudoPassword must be a string up to 256 chars');
     }
+    if (body.gpmsBridgeIp != null && body.gpmsBridgeIp !== '') {
+        if (typeof body.gpmsBridgeIp !== 'string' || !/^[a-zA-Z0-9.\-]{1,253}$/.test(body.gpmsBridgeIp)) errors.push('gpmsBridgeIp must be a valid hostname or IPv4');
+    }
+    if (body.agentType != null && body.agentType !== '') {
+        if (!VALID_AGENT_TYPES.has(body.agentType)) errors.push('agentType must be TTP or RELAY');
+    }
     return errors;
 }
 
@@ -335,6 +482,8 @@ app.post('/api/sites', requireAdmin, (req, res) => {
         alertSchedule: scheduleCheck.value || normalizeSchedule(),
         butlerIp: (body.butlerIp || '').trim(),
         targetIp: (body.targetIp || '').trim(),
+        gpmsBridgeIp: (body.gpmsBridgeIp || '').trim(),
+        agentType: (body.agentType || '').trim(),
         gorPassword: (body.gorPassword || '').trim(),
         botSudoPassword: (body.botSudoPassword || '').trim()
     };
@@ -374,6 +523,8 @@ app.put('/api/sites/:name', requireAdmin, (req, res) => {
     }
     if (body.butlerIp != null) s.butlerIp = body.butlerIp.trim();
     if (body.targetIp != null) s.targetIp = body.targetIp.trim();
+    if (body.gpmsBridgeIp != null) s.gpmsBridgeIp = body.gpmsBridgeIp.trim();
+    if (body.agentType != null) s.agentType = body.agentType.trim();
     if (body.gorPassword != null && body.gorPassword !== '') s.gorPassword = body.gorPassword.trim();
     if (body.botSudoPassword != null && body.botSudoPassword !== '') s.botSudoPassword = body.botSudoPassword.trim();
 
@@ -412,16 +563,30 @@ app.post('/api/compliance/:site', requireAdmin, async (req, res) => {
     const body = req.body || {};
     if (typeof body !== 'object') return res.status(400).json({ error: 'Invalid body' });
 
+    // Validate against the site's *actual* columns when available; fall back
+    // to the legacy global allowlist if discovery fails.
+    let allowed;
+    try {
+        const cols = await fetchSiteColumns(site);
+        allowed = new Set(cols.length > 0 ? cols : COMPLIANCE_FIELDS);
+    } catch {
+        allowed = COMPLIANCE_FIELD_SET;
+    }
+
     const filtered = {};
+    const rejected = [];
     for (const [k, v] of Object.entries(body)) {
-        if (!COMPLIANCE_FIELD_SET.has(k)) continue;
+        if (!allowed.has(k)) { rejected.push(k); continue; }
         if (typeof v !== 'string') continue;
         const trimmed = v.trim();
         if (!trimmed) continue;
         if (trimmed.length > 256) return res.status(400).json({ error: `${k} is too long` });
         filtered[k] = trimmed;
     }
-    if (!filtered.api_version) {
+    if (rejected.length) {
+        return res.status(400).json({ error: `Unknown columns for this site: ${rejected.join(', ')}` });
+    }
+    if (allowed.has('api_version') && !filtered.api_version) {
         return res.status(400).json({ error: 'api_version is required' });
     }
     if (Object.keys(filtered).length === 0) {
@@ -459,11 +624,47 @@ app.post('/api/alerts/:site/send', requireAdmin, async (req, res) => {
     const { site } = req.params;
     if (!sites[site]) return res.status(404).json({ error: 'Unknown site' });
     try {
-        const result = await alerts.sendReport(site, sites[site]);
+        const extra = agentRecipients[sites[site].agentType] || [];
+        const result = await alerts.sendReport(site, sites[site], { agentTypeRecipients: extra });
         res.json({ ok: true, recipients: result.recipients, totals: result.totals });
     } catch (err) {
         console.error(`Alert send failed for ${site}:`, err);
         res.status(502).json({ error: err.message || 'Failed to send alert' });
+    }
+});
+
+// Send ONE combined compliance email covering every site whose agentType matches.
+// Body is an aggregated summary table; one xlsx attachment per site.
+// BCC'd to the per-agent recipient list (plus any per-site recipients merged in
+// would be confusing for a combined mail — we deliberately use ONLY the agent
+// list here, not per-site recipients).
+app.post('/api/alerts/by-agent/:agentType/send', requireAdmin, async (req, res) => {
+    const { agentType } = req.params;
+    if (!['TTP', 'RELAY'].includes(agentType)) {
+        return res.status(400).json({ error: 'agentType must be TTP or RELAY' });
+    }
+    const targets = Object.entries(sites).filter(([, s]) => s.agentType === agentType);
+    if (targets.length === 0) {
+        return res.status(400).json({ error: `No sites configured with agentType=${agentType}` });
+    }
+    const bucket = agentRecipients[agentType] || { to: [], cc: [], bcc: [] };
+    const totalAddrs = (bucket.to || []).length + (bucket.cc || []).length + (bucket.bcc || []).length;
+    if (totalAddrs === 0) {
+        return res.status(400).json({ error: `Agent recipients for ${agentType} are empty. Add at least one To / CC / BCC address.` });
+    }
+    try {
+        const result = await alerts.sendCombinedReport(agentType, targets, { bucket });
+        res.json({
+            ok: true,
+            agentType,
+            sites: targets.length,
+            sentTo: result.recipients.length,
+            totals: result.totals,
+            perSite: result.perSite
+        });
+    } catch (err) {
+        console.error(`Combined alert send failed for ${agentType}:`, err);
+        res.status(502).json({ error: err.message || 'Failed to send combined alert' });
     }
 });
 
@@ -513,8 +714,26 @@ function appendOpsAudit(user, siteName, command, outcome) {
 const opsRunning = new Set();
 
 const VDA_REMOTE_BUILD_DIR = '/home/gor/vda_remote_build';
-const VDA_GROUP_VARS_PATH = '/opt/ranger_deployer/inventory/group_vars/vda_remote';
-const VDA_INVENTORY_PATH = '/opt/ranger_deployer/inventory/vda_remote';
+// Inventory and group_vars filenames vary per agent type. TTP sites use `ttp`;
+// everything else uses `vda_remote` (the legacy default).
+function vdaPaths(site) {
+    const filename = site && site.agentType === 'TTP' ? 'ttp' : 'vda_remote';
+    return {
+        inventoryPath: `/opt/ranger_deployer/inventory/${filename}`,
+        groupVarsPath: `/opt/ranger_deployer/inventory/group_vars/${filename}`
+    };
+}
+
+// Where to stage the uploaded VDA tar on the bridge. Prefers an explicit
+// `vda_remote_build_location` from group_vars; falls back to per-agent default.
+//   TTP   → /tmp/vda_remote             (contains release_<ver>/ subfolders)
+//   RELAY → /home/gor/vda_remote_build  (flat tars)
+function vdaBuildLocation(site, groupVars) {
+    if (groupVars && typeof groupVars.vda_remote_build_location === 'string' && groupVars.vda_remote_build_location.trim()) {
+        return groupVars.vda_remote_build_location.trim().replace(/^['"]|['"]$/g, '');
+    }
+    return site && site.agentType === 'TTP' ? '/tmp/vda_remote' : '/home/gor/vda_remote_build';
+}
 const VDA_DEPLOY_DIR = '/opt/ranger_deployer';
 const VDA_DEPLOY_TIMEOUT_MS = 60 * 60 * 1000;
 
@@ -544,15 +763,55 @@ app.get('/api/operations/vda/inventory', requireAuth, async (req, res) => {
     console.error('[ops]', new Date().toISOString(), 'GET /api/operations/vda/inventory', { user: req.session.user, site: siteName });
     const cfg = siteOpsConfig(siteName);
     if (cfg.error) return res.status(400).json({ error: cfg.error });
+    const { inventoryPath, groupVarsPath } = vdaPaths(sites[siteName]);
+    // Use the per-agent default for the listing command (parallel with group_vars read).
+    const site = sites[siteName];
+    const defaultBuildDir = vdaBuildLocation(site, null);
+    const isTtp = site && site.agentType === 'TTP';
+    // TTP   → list release_* DIRECTORIES under build dir (e.g. release_v1.3.11)
+    // RELAY → list *.tar.gz FILES (one level deep)
+    const listCmd = isTtp
+        ? `find ${defaultBuildDir} -maxdepth 1 -type d -name 'release*' -printf '%T@ %f\\n' 2>/dev/null | sort -rn | cut -d' ' -f2-`
+        : `find ${defaultBuildDir} -maxdepth 2 -type f \\( -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar' \\) -printf '%T@ %P\\n' 2>/dev/null | sort -rn | cut -d' ' -f2-`;
     try {
-        const [text, ipToBot] = await Promise.all([
-            readRemoteFile(cfg.opts, VDA_INVENTORY_PATH),
-            fetchIpToBotMap(sites[siteName])
+        const [text, groupVarsText, tarListResult, ipDetails] = await Promise.all([
+            readRemoteFile(cfg.opts, inventoryPath),
+            readRemoteFile(cfg.opts, groupVarsPath).catch(() => ''),
+            runOnSiteServer({
+                ...cfg.opts,
+                command: listCmd,
+                timeoutMs: 20000
+            }).catch(() => ({ code: 1, stdout: '', stderr: '' })),
+            fetchIpDetails(sites[siteName]).catch(() => ({ ipToBot: {}, ipToVersion: {} }))
         ]);
         const sections = parseInventory(text);
         const ports = parseInventoryPorts(text);
-        console.error('[ops]', new Date().toISOString(), 'inventory parsed', { sectionCount: Object.keys(sections).length, ipMapSize: Object.keys(ipToBot).length });
-        res.json({ ok: true, sections, ports, ipToBot });
+        const groupVars = parseGroupVars(groupVarsText);
+        // tarFiles are paths RELATIVE to defaultBuildDir (e.g. "release_v1.3.11/vda_remote_v1.3.11.tar.gz" for TTP).
+        const tarFiles = String(tarListResult.stdout || '')
+            .split('\n')
+            .map(s => s.trim())
+            .filter(Boolean);
+        console.error('[ops]', new Date().toISOString(), 'inventory parsed', {
+            sectionCount: Object.keys(sections).length,
+            ipMapSize: Object.keys(ipDetails.ipToBot).length,
+            versionMapSize: Object.keys(ipDetails.ipToVersion).length,
+            tarCount: tarFiles.length,
+            emqxHost: groupVars.emqx_mqtt_host
+        });
+        // Resolved build location (group_vars override if present, else default).
+        const buildLocation = vdaBuildLocation(sites[siteName], groupVars);
+        res.json({
+            ok: true,
+            sections,
+            ports,
+            ipToBot: ipDetails.ipToBot,
+            ipToVersion: ipDetails.ipToVersion,
+            groupVars,
+            tarFiles,
+            tarListMode: isTtp ? 'release-folders' : 'tar-files',
+            buildLocation
+        });
     } catch (err) {
         console.error('[ops]', new Date().toISOString(), 'inventory load failed', { error: err.message });
         res.status(502).json({ error: err.message });
@@ -576,7 +835,24 @@ app.post(
             return res.status(400).json({ error: cfg.error });
         }
         const tarFile = req.file;
-        if (!tarFile) return res.status(400).json({ error: 'tar file is required' });
+        const existingTar = String((req.body && req.body.existingTar) || '').trim();
+        if (!tarFile && !existingTar) {
+            return res.status(400).json({ error: 'Provide either a new tar upload or pick an existing tar on the bridge.' });
+        }
+        if (tarFile && existingTar) {
+            cleanupUpload(tarFile);
+            return res.status(400).json({ error: 'Send only one of: uploaded tar OR existingTar.' });
+        }
+        // existingTar may be:
+        //   - a release folder name for TTP (e.g. "release_v1.3.11")
+        //   - a bare tar filename or "<subfolder>/<filename>" for RELAY
+        // Path traversal is blocked.
+        if (existingTar && (
+            existingTar.includes('..') || existingTar.startsWith('/') ||
+            !/^[a-zA-Z0-9._\-]+(\/[a-zA-Z0-9._\-]+)?$/.test(existingTar)
+        )) {
+            return res.status(400).json({ error: 'existingTar must be a filename, release folder, or "<subfolder>/<filename>".' });
+        }
 
         const vdaRemoteVersion = String(req.body.vdaRemoteVersion || '').trim();
         const emqxHost = String(req.body.emqxMqttHost || '').trim();
@@ -624,11 +900,13 @@ app.post(
             cleanupUpload(tarFile);
             return res.status(400).json({ error: 'No IPs selected for deploy' });
         }
-        if (!/\.(tar|tar\.gz|tgz)$/i.test(tarFile.originalname)) {
+        if (tarFile && !/\.(tar|tar\.gz|tgz)$/i.test(tarFile.originalname)) {
             cleanupUpload(tarFile);
             return res.status(400).json({ error: 'tar filename must end with .tar, .tar.gz, or .tgz' });
         }
-        const safeTarName = tarFile.originalname.replace(/[^a-zA-Z0-9._\-]/g, '_').slice(0, 200);
+        const safeTarName = existingTar
+            ? existingTar
+            : tarFile.originalname.replace(/[^a-zA-Z0-9._\-]/g, '_').slice(0, 200);
         const lockKey = `site:${siteName}`;
         if (opsRunning.has(lockKey)) {
             cleanupUpload(tarFile);
@@ -652,30 +930,49 @@ app.post(
             writeEvent(step);
         };
         try {
-            addStep('upload-received', { size: tarFile.size, filename: safeTarName });
+            // Resolve per-site paths and the tar build location BEFORE we upload, so the file
+            // lands at the location ansible actually reads from (TTP uses /tmp/vda_remote/...).
+            const { inventoryPath, groupVarsPath } = vdaPaths(sites[siteName]);
+            addStep('read-group-vars-start', { path: groupVarsPath });
+            const groupVarsText = await readRemoteFile(cfg.opts, groupVarsPath);
+            const parsedGroupVars = parseGroupVars(groupVarsText);
+            const buildLocation = vdaBuildLocation(sites[siteName], parsedGroupVars);
+            addStep('read-group-vars-done', { buildLocation });
 
-            addStep('scp-tar-start');
-            const fileStream = fs.createReadStream(tarFile.path);
-            await writeRemoteFile(
-                { ...cfg.opts, useSudo: true, chownTo: 'gor:gor', timeoutMs: 15 * 60 * 1000 },
-                `${VDA_REMOTE_BUILD_DIR}/${safeTarName}`,
-                fileStream
-            );
-            addStep('scp-tar-done');
+            if (existingTar) {
+                // For TTP, existingTar is typically a release_<ver>/ folder under buildLocation.
+                // No upload needed — the tar is already on the bridge.
+                addStep('using-existing', { selection: safeTarName, buildLocation });
+            } else {
+                addStep('upload-received', { size: tarFile.size, filename: safeTarName });
+                addStep('scp-tar-start', { dest: `${buildLocation}/${safeTarName}` });
+                // Ensure the directory exists (TTP's /tmp/vda_remote may not exist yet on a fresh site).
+                await runOnSiteServer({
+                    ...cfg.opts,
+                    command: `mkdir -p ${shellQuote(buildLocation)} && sudo -n chown gor:gor ${shellQuote(buildLocation)} 2>/dev/null || true`,
+                    timeoutMs: 15000
+                }).catch(() => {});
+                const fileStream = fs.createReadStream(tarFile.path);
+                await writeRemoteFile(
+                    { ...cfg.opts, useSudo: true, chownTo: 'gor:gor', timeoutMs: 15 * 60 * 1000 },
+                    `${buildLocation}/${safeTarName}`,
+                    fileStream
+                );
+                addStep('scp-tar-done');
+            }
 
-            addStep('patch-group-vars-start');
-            const groupVarsText = await readRemoteFile(cfg.opts, VDA_GROUP_VARS_PATH);
+            addStep('patch-group-vars-start', { path: groupVarsPath });
             const newGroupVars = updateGroupVars(groupVarsText, {
                 vda_remote_version: vdaRemoteVersion,
                 emqx_mqtt_host: emqxHost
             });
-            await writeRemoteFile({ ...cfg.opts, useSudo: true }, VDA_GROUP_VARS_PATH, newGroupVars);
+            await writeRemoteFile({ ...cfg.opts, useSudo: true }, groupVarsPath, newGroupVars);
             addStep('patch-group-vars-done');
 
-            addStep('patch-inventory-start');
-            const invText = await readRemoteFile(cfg.opts, VDA_INVENTORY_PATH);
+            addStep('patch-inventory-start', { path: inventoryPath });
+            const invText = await readRemoteFile(cfg.opts, inventoryPath);
             const newInv = applyMultiSectionActiveIps(invText, selections);
-            await writeRemoteFile({ ...cfg.opts, useSudo: true }, VDA_INVENTORY_PATH, newInv);
+            await writeRemoteFile({ ...cfg.opts, useSudo: true }, inventoryPath, newInv);
             addStep('patch-inventory-done');
 
             addStep('vda-deploy-start');
@@ -746,32 +1043,47 @@ async function discoverBotTag(site) {
 }
 
 async function fetchIpToBotMap(site) {
+    const d = await fetchIpDetails(site);
+    return d.ipToBot;
+}
+
+// Returns { ipToBot, ipToVersion } from the site's latest bot_firmware records.
+// Uses a single InfluxDB query when ip is a tag (Apotek-style) and a fallback
+// when ip is a field (walmartpot-style).
+async function fetchIpDetails(site) {
     const botTag = await discoverBotTag(site);
-    if (!botTag) return {};
+    if (!botTag) return { ipToBot: {}, ipToVersion: {} };
     const j = await influxQuery(site, `SELECT last("vda_version") FROM "${site.measurement}" GROUP BY "${botTag}", "ip"`);
     const series = (j && j.results && j.results[0] && j.results[0].series) || [];
-    const map = {};
+    const ipToBot = {};
+    const ipToVersion = {};
     for (const s of series) {
         const t = s.tags || {};
         const ip = t.ip;
         const botId = t[botTag];
-        if (ip && botId) map[ip] = botId;
+        if (ip && botId) ipToBot[ip] = botId;
+        const row = (s.values && s.values[0]) || [];
+        const v = row[1]; // [time, last]
+        if (ip && v != null && typeof v === 'string') ipToVersion[ip] = v;
     }
-    if (Object.keys(map).length === 0) {
-        // ip may be a field rather than a tag (e.g. walmartpot). Fall back to one row per bot.
+    if (Object.keys(ipToBot).length === 0) {
+        // ip is a field, not a tag (walmartpot). Fall back to one row per bot.
         const j2 = await influxQuery(site, `SELECT last("ip"), last("vda_version") FROM "${site.measurement}" GROUP BY "${botTag}"`);
         const series2 = (j2 && j2.results && j2.results[0] && j2.results[0].series) || [];
         for (const s of series2) {
             const t = s.tags || {};
             const botId = t[botTag];
             const cols = s.columns || [];
-            const ipIdx = cols.indexOf('last');
+            const ipIdx = cols.findIndex(c => c === 'last' || c === 'last_1' || c === 'last_ip');
+            const verIdx = cols.findIndex(c => c === 'last_1' || c === 'last_vda_version');
             const row = (s.values && s.values[0]) || [];
             const ip = ipIdx !== -1 ? row[ipIdx] : null;
-            if (ip && botId && typeof ip === 'string') map[ip] = botId;
+            const ver = verIdx !== -1 && verIdx !== ipIdx ? row[verIdx] : null;
+            if (ip && botId && typeof ip === 'string') ipToBot[ip] = botId;
+            if (ip && ver && typeof ver === 'string') ipToVersion[ip] = ver;
         }
     }
-    return map;
+    return { ipToBot, ipToVersion };
 }
 
 async function fetchBotIp(site, botId) {
@@ -913,9 +1225,10 @@ app.post(
         const startedAt = Date.now();
 
         // Read inventory BEFORE streaming so we can still 502 cleanly if it fails
+        const { inventoryPath: botInventoryPath } = vdaPaths(sites[siteName]);
         let invText, ports;
         try {
-            invText = await readRemoteFile(cfg.opts, VDA_INVENTORY_PATH);
+            invText = await readRemoteFile(cfg.opts, botInventoryPath);
             ports = parseInventoryPorts(invText);
         } catch (err) {
             opsRunning.delete(lockKey);

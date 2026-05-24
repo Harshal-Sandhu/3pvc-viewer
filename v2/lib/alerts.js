@@ -182,7 +182,7 @@ async function renderXlsx({ siteName, botColumns, rows, complianceTable, complia
         { metric: 'Bots evaluated', value: totals.total },
         { metric: 'Compatible', value: totals.compatible },
         { metric: 'Incompatible', value: totals.incompatible },
-        { metric: 'Unknown (no compliance match)', value: totals.unknown }
+        { metric: 'Dead (no api_version at script time)', value: totals.unknown }
     ]);
 
     const detail = wb.addWorksheet('Per-bot comparison');
@@ -219,7 +219,7 @@ async function renderXlsx({ siteName, botColumns, rows, complianceTable, complia
 
     for (const row of rows) {
         const { ref, diffs } = diffRow(botColumns, row, complianceTable, complianceIndex);
-        const status = !ref ? 'Unknown' : (diffs.length === 0 ? 'Compatible' : 'Incompatible');
+        const status = !ref ? 'Dead' : (diffs.length === 0 ? 'Compatible' : 'Incompatible');
         const diffByField = new Map(diffs.map(d => [d.field, d]));
 
         const xlRow = [
@@ -304,7 +304,7 @@ function renderEmail(report) {
             <tr><td style="padding:4px 14px 4px 0;color:#666">Bots evaluated</td><td style="padding:4px 0"><b>${totals.total}</b></td></tr>
             <tr><td style="padding:4px 14px 4px 0;color:#0a7f30">Compatible</td><td style="padding:4px 0"><b>${totals.compatible}</b></td></tr>
             <tr><td style="padding:4px 14px 4px 0;color:#b91c1c">Incompatible</td><td style="padding:4px 0"><b>${totals.incompatible}</b></td></tr>
-            <tr><td style="padding:4px 14px 4px 0;color:#666">Unknown api_version</td><td style="padding:4px 0"><b>${totals.unknown}</b></td></tr>
+            <tr><td style="padding:4px 14px 4px 0;color:#666">Dead at script time</td><td style="padding:4px 0"><b>${totals.unknown}</b></td></tr>
         </table>
         ${mismatches.length === 0 ? '<p style="color:#0a7f30">No mismatches.</p>' : `
         <h3 style="margin:18px 0 8px">Mismatched bots${remaining ? ` (showing first ${top.length})` : ''}</h3>
@@ -330,7 +330,7 @@ function renderEmail(report) {
         `Bots evaluated:  ${totals.total}`,
         `Compatible:      ${totals.compatible}`,
         `Incompatible:    ${totals.incompatible}`,
-        `Unknown:         ${totals.unknown}`,
+        `Dead (at script time): ${totals.unknown}`,
         '',
         mismatches.length === 0 ? 'No mismatches.' : `Mismatched bots: ${mismatches.length}`,
         ...top.map(m => `  - ${m.bot_id} (${m.ip}) api=${m.api_version}: ${m.diffs.length} diff(s)`)
@@ -406,21 +406,27 @@ async function sendViaGmailApi(mimeBuffer) {
     return body.id;
 }
 
-function resolveRecipients(site) {
-    const fromSite = Array.isArray(site.recipients)
-        ? site.recipients
-        : (typeof site.recipients === 'string' ? site.recipients.split(',') : []);
-    const normalized = fromSite.map(s => String(s).trim()).filter(Boolean);
-    if (normalized.length) return normalized;
+// Merge per-site recipients with per-agent-type recipients (passed in via opts),
+// dedupe, and fall back to REPORT_RECIPIENT env if nothing else is configured.
+function resolveRecipients(site, opts = {}) {
+    const toArr = (v) => Array.isArray(v) ? v : (typeof v === 'string' ? v.split(',') : []);
+    const fromSite   = toArr(site && site.recipients);
+    const fromAgent  = toArr(opts.agentTypeRecipients);
+    const merged = [...fromSite, ...fromAgent]
+        .map(s => String(s).trim().toLowerCase())
+        .filter(Boolean);
+    const deduped = Array.from(new Set(merged));
+    if (deduped.length) return deduped;
     const fallback = (process.env.REPORT_RECIPIENT || '').split(',').map(s => s.trim()).filter(Boolean);
     return fallback;
 }
 
 // High-level: build + send for one site. Returns { sent, recipients, totals }.
-async function sendReport(siteName, site) {
-    const recipients = resolveRecipients(site);
+// opts.agentTypeRecipients — emails shared by every site with this agentType.
+async function sendReport(siteName, site, opts = {}) {
+    const recipients = resolveRecipients(site, opts);
     if (recipients.length === 0) {
-        throw new Error('No recipients configured (site.recipients or REPORT_RECIPIENT).');
+        throw new Error('No recipients configured (site.recipients, agent-recipients, or REPORT_RECIPIENT).');
     }
     if (!process.env.GMAIL_USER) {
         throw new Error('GMAIL_USER is not set in .env.');
@@ -428,11 +434,14 @@ async function sendReport(siteName, site) {
     const report = await buildReport(siteName, site);
     const { subject, html, text } = renderEmail(report);
 
-    // Build MIME locally, ship via Gmail HTTP API. See sendViaGmailApi() above.
+    // BCC every recipient instead of TO so that each inbox shows just one
+    // visible recipient (the sender). Keeps the list private and avoids the
+    // "everyone sees everyone" reply-all problem.
     const builder = getMimeBuilder();
     const info = await builder.sendMail({
         from: process.env.GMAIL_USER,
-        to: recipients.join(','),
+        to: process.env.GMAIL_USER,   // visible header: the sender itself
+        bcc: recipients.join(','),    // actual delivery: everyone, hidden
         subject,
         text,
         html,
@@ -444,4 +453,125 @@ async function sendReport(siteName, site) {
     return { sent: true, recipients, totals: report.totals, messageId };
 }
 
-module.exports = { buildReport, sendReport, renderEmail, resolveRecipients, reportFilename };
+// Build a single combined email covering every site in `entries`.
+// `entries` is [[siteName, site], …]. opts.bucket = { to: [], cc: [], bcc: [] }.
+// Backward-compat: opts.recipients (flat array) is treated as BCC.
+// Each site's xlsx is attached separately so support engineers can grab per-site detail.
+async function sendCombinedReport(agentType, entries, opts = {}) {
+    const cleanList = (arr) => Array.from(new Set((arr || []).map(s => String(s).trim().toLowerCase()).filter(Boolean)));
+    const bucket = opts.bucket
+        ? { to: cleanList(opts.bucket.to), cc: cleanList(opts.bucket.cc), bcc: cleanList(opts.bucket.bcc) }
+        : { to: [], cc: [], bcc: cleanList(opts.recipients) };
+    const allRecipients = Array.from(new Set([...bucket.to, ...bucket.cc, ...bucket.bcc]));
+    if (allRecipients.length === 0) throw new Error('No recipients provided for combined report');
+    if (!process.env.GMAIL_USER) throw new Error('GMAIL_USER is not set in .env.');
+    if (entries.length === 0) throw new Error(`No sites with agentType=${agentType}`);
+
+    const perSite = [];
+    for (const [name, site] of entries) {
+        try {
+            const r = await buildReport(name, site);
+            perSite.push({ name, ok: true, totals: r.totals, mismatches: r.mismatches, xlsx: r.xlsxBuffer });
+        } catch (err) {
+            perSite.push({ name, ok: false, error: err.message });
+        }
+    }
+
+    const agg = perSite.reduce((a, r) => {
+        if (!r.ok) { a.failed += 1; return a; }
+        a.total += r.totals.total;
+        a.compatible += r.totals.compatible;
+        a.incompatible += r.totals.incompatible;
+        a.unknown += r.totals.unknown;
+        return a;
+    }, { total: 0, compatible: 0, incompatible: 0, unknown: 0, failed: 0 });
+
+    const stamp = new Date().toISOString();
+    const subject = `3PVC Report for ${agentType}`;
+
+    const siteRowsHtml = perSite.map(r => {
+        if (!r.ok) {
+            return `<tr>
+                <td style="padding:6px 10px;border-bottom:1px solid #eee"><b>${escapeHtml(r.name)}</b></td>
+                <td colspan="5" style="padding:6px 10px;border-bottom:1px solid #eee;color:#b91c1c">FAILED: ${escapeHtml(r.error)}</td>
+            </tr>`;
+        }
+        return `<tr>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee"><b>${escapeHtml(r.name)}</b></td>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">${r.totals.total}</td>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;color:#0a7f30">${r.totals.compatible}</td>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;color:#b91c1c"><b>${r.totals.incompatible}</b></td>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">${r.totals.unknown}</td>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee">${escapeHtml(reportFilename(r.name))}</td>
+        </tr>`;
+    }).join('');
+
+    const html = `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,sans-serif;color:#222;max-width:920px;margin:auto">
+        <h2 style="margin:0 0 8px">3PVC compliance report — ${escapeHtml(agentType)} (${entries.length} site${entries.length === 1 ? '' : 's'})</h2>
+        <p style="color:#666;margin:0 0 16px">Generated ${escapeHtml(stamp)}</p>
+        <table style="border-collapse:collapse;margin-bottom:18px">
+            <tr><td style="padding:4px 14px 4px 0;color:#666">Bots evaluated</td><td style="padding:4px 0"><b>${agg.total}</b></td></tr>
+            <tr><td style="padding:4px 14px 4px 0;color:#0a7f30">Compatible</td><td style="padding:4px 0"><b>${agg.compatible}</b></td></tr>
+            <tr><td style="padding:4px 14px 4px 0;color:#b91c1c">Incompatible</td><td style="padding:4px 0"><b>${agg.incompatible}</b></td></tr>
+            <tr><td style="padding:4px 14px 4px 0;color:#666">Dead at script time</td><td style="padding:4px 0"><b>${agg.unknown}</b></td></tr>
+            ${agg.failed ? `<tr><td style="padding:4px 14px 4px 0;color:#b91c1c">Sites that failed to report</td><td style="padding:4px 0"><b>${agg.failed}</b></td></tr>` : ''}
+        </table>
+        <h3 style="margin:18px 0 8px">Per-site breakdown</h3>
+        <table style="border-collapse:collapse;font-size:13px;width:100%">
+            <thead><tr style="background:#f5f5f5">
+                <th style="padding:6px 10px;text-align:left;border-bottom:1px solid #ddd">Site</th>
+                <th style="padding:6px 10px;text-align:right;border-bottom:1px solid #ddd">Bots</th>
+                <th style="padding:6px 10px;text-align:right;border-bottom:1px solid #ddd">Compatible</th>
+                <th style="padding:6px 10px;text-align:right;border-bottom:1px solid #ddd">Incompatible</th>
+                <th style="padding:6px 10px;text-align:right;border-bottom:1px solid #ddd">Dead</th>
+                <th style="padding:6px 10px;text-align:left;border-bottom:1px solid #ddd">Attached file</th>
+            </tr></thead>
+            <tbody>${siteRowsHtml}</tbody>
+        </table>
+        <p style="color:#666;margin-top:18px;font-size:12px">One xlsx per site is attached — see per-bot comparison with full firmware detail and expected values.</p>
+    </body></html>`;
+
+    const text = [
+        `3PVC compliance report — ${agentType} (${entries.length} sites)`,
+        `Generated ${stamp}`,
+        '',
+        `Bots evaluated:  ${agg.total}`,
+        `Compatible:      ${agg.compatible}`,
+        `Incompatible:    ${agg.incompatible}`,
+        `Dead (at script time): ${agg.unknown}`,
+        agg.failed ? `Failed sites:    ${agg.failed}` : null,
+        '',
+        'Per-site breakdown:',
+        ...perSite.map(r => r.ok
+            ? `  - ${r.name}: ${r.totals.incompatible} incompatible / ${r.totals.total}`
+            : `  - ${r.name}: FAILED — ${r.error}`)
+    ].filter(Boolean).join('\n');
+
+    const attachments = perSite
+        .filter(r => r.ok && r.xlsx)
+        .map(r => ({ filename: reportFilename(r.name), content: r.xlsx }));
+
+    // If `to` is empty, fall back to sending To: <sender> so BCC-only mode still works.
+    const builder = getMimeBuilder();
+    const info = await builder.sendMail({
+        from: process.env.GMAIL_USER,
+        to:  bucket.to.length  ? bucket.to.join(',')  : process.env.GMAIL_USER,
+        cc:  bucket.cc.length  ? bucket.cc.join(',')  : undefined,
+        bcc: bucket.bcc.length ? bucket.bcc.join(',') : undefined,
+        subject,
+        text,
+        html,
+        attachments
+    });
+    const messageId = await sendViaGmailApi(info.message);
+    return {
+        sent: true,
+        recipients: allRecipients,
+        bucket,
+        totals: agg,
+        perSite: perSite.map(r => ({ name: r.name, ok: r.ok, error: r.error, totals: r.totals })),
+        messageId
+    };
+}
+
+module.exports = { buildReport, sendReport, sendCombinedReport, renderEmail, resolveRecipients, reportFilename };

@@ -33,6 +33,7 @@ const els = {
     siteAlertTime: $('#site-alert-time'),
     siteAlertDow: $('#site-alert-dow'),
     siteAlertDowWrap: $('#site-alert-dow-wrap'),
+    siteAgentType: $('#site-agent-type'),
     siteButlerIp: $('#site-butler-ip'),
     siteTargetIp: $('#site-target-ip'),
     siteGorPassword: $('#site-gor-password'),
@@ -40,6 +41,17 @@ const els = {
     siteSave: $('#site-save'),
     siteCancel: $('#site-cancel'),
     siteError: $('#site-error'),
+
+    agentRecipientsForm: $('#agent-recipients-form'),
+    agentRecipientsTtpTo:  $('#agent-recipients-ttp-to'),
+    agentRecipientsTtpCc:  $('#agent-recipients-ttp-cc'),
+    agentRecipientsTtpBcc: $('#agent-recipients-ttp-bcc'),
+    agentRecipientsRelayTo:  $('#agent-recipients-relay-to'),
+    agentRecipientsRelayCc:  $('#agent-recipients-relay-cc'),
+    agentRecipientsRelayBcc: $('#agent-recipients-relay-bcc'),
+    agentRecipientsSave: $('#agent-recipients-save'),
+    agentRecipientsSendTtp: $('#agent-recipients-send-ttp'),
+    agentRecipientsSendRelay: $('#agent-recipients-send-relay'),
 
     deleteModal: $('#delete-modal'),
     deleteModalClose: $('#delete-modal-close'),
@@ -132,7 +144,10 @@ function wireEvents() {
     els.deleteConfirm.addEventListener('click', onDeleteConfirm);
     els.deleteModal.addEventListener('click', (e) => { if (e.target === els.deleteModal) closeDeleteModal(); });
 
-    els.compSite.addEventListener('change', updateCompTarget);
+    els.agentRecipientsForm.addEventListener('submit', onAgentRecipientsSave);
+    els.agentRecipientsSendTtp.addEventListener('click', () => onAgentRecipientsSend('TTP', els.agentRecipientsSendTtp));
+    els.agentRecipientsSendRelay.addEventListener('click', () => onAgentRecipientsSend('RELAY', els.agentRecipientsSendRelay));
+    els.compSite.addEventListener('change', onCompSiteChange);
     els.compForm.addEventListener('submit', onCompSubmit);
     els.compClear.addEventListener('click', () => {
         for (const input of els.compFields.querySelectorAll('input')) input.value = '';
@@ -152,19 +167,149 @@ function wireEvents() {
 
 async function refreshAll() {
     try {
-        const [sites, fields] = await Promise.all([
+        const [sitesData, agentR] = await Promise.all([
             api('/api/sites'),
-            api('/api/compliance-fields')
+            api('/api/agent-recipients').catch(() => ({ TTP: [], RELAY: [] }))
         ]);
-        state.sites = sites;
-        state.fields = fields;
+        state.sites = sitesData;
+        state.agentRecipients = agentR || { TTP: [], RELAY: [] };
+        // Per-site fields are now loaded on site selection; until a site is
+        // picked we keep the form empty with a hint.
+        state.fields = [];
+        state.fieldsSource = null;
         renderSites();
         renderCompliancePicker();
         renderComplianceFields();
+        renderAgentRecipients();
         updateCompTarget();
     } catch (err) {
         if (err.status === 401) setView(false);
         else toast(err.message, 'error');
+    }
+}
+
+function asListString(arr) {
+    return Array.isArray(arr) ? arr.join(', ') : '';
+}
+function asEmailList(input) {
+    return (input || '').split(',').map(s => s.trim()).filter(Boolean);
+}
+function bucketOf(agent) {
+    const v = (state.agentRecipients || {})[agent];
+    // Accept both new shape {to,cc,bcc} and legacy bare array (treated as bcc).
+    if (Array.isArray(v)) return { to: [], cc: [], bcc: v };
+    return { to: v?.to || [], cc: v?.cc || [], bcc: v?.bcc || [] };
+}
+function renderAgentRecipients() {
+    const t = bucketOf('TTP');
+    const r = bucketOf('RELAY');
+    els.agentRecipientsTtpTo.value    = asListString(t.to);
+    els.agentRecipientsTtpCc.value    = asListString(t.cc);
+    els.agentRecipientsTtpBcc.value   = asListString(t.bcc);
+    els.agentRecipientsRelayTo.value  = asListString(r.to);
+    els.agentRecipientsRelayCc.value  = asListString(r.cc);
+    els.agentRecipientsRelayBcc.value = asListString(r.bcc);
+}
+
+async function onAgentRecipientsSend(agentType, btn) {
+    const targets = (state.sites || []).filter(s => s.agentType === agentType);
+    if (targets.length === 0) { toast(`No sites configured with agentType=${agentType}`, 'warn'); return; }
+    const b = bucketOf(agentType);
+    const totalAddrs = b.to.length + b.cc.length + b.bcc.length;
+    if (totalAddrs === 0) { toast(`Add at least one To/CC/BCC for ${agentType}, then Save`, 'warn'); return; }
+    const headersLine = [
+        b.to.length  ? `To:  ${b.to.join(', ')}`   : null,
+        b.cc.length  ? `CC:  ${b.cc.join(', ')}`   : null,
+        b.bcc.length ? `BCC: ${b.bcc.join(', ')}` : null
+    ].filter(Boolean).join('\n');
+    const ok = window.confirm(
+        `Send ONE combined ${agentType} compliance email covering ${targets.length} site${targets.length !== 1 ? 's' : ''}?\n\n`
+        + `Sites in the email body: ${targets.map(s => s.name).join(', ')}\n\n`
+        + headersLine + '\n\n'
+        + `One xlsx will be attached per site.`
+    );
+    if (!ok) return;
+    const originalLabel = btn.textContent;
+    btn.textContent = 'Sending…';
+    btn.disabled = true;
+    try {
+        const res = await api(`/api/alerts/by-agent/${encodeURIComponent(agentType)}/send`, { method: 'POST' });
+        const fails = (res.perSite || []).filter(r => !r.ok);
+        const okCount = (res.perSite || []).filter(r => r.ok).length;
+        const msg = fails.length
+            ? `Sent 1 combined ${agentType} mail — ${okCount}/${res.sites} sites in body; ${fails.length} failed`
+            : `Sent 1 combined ${agentType} mail covering all ${res.sites} sites ✓ — ${res.totals.incompatible} incompatible / ${res.totals.total}`;
+        toast(msg, fails.length ? 'warn' : 'success');
+        if (fails.length) {
+            console.warn('Sites that failed to build:\n' + fails.map(r => `${r.name}: ${r.error}`).join('\n'));
+        }
+    } catch (err) {
+        if (err.status === 401) { setView(false); return; }
+        toast(err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+    }
+}
+
+async function onAgentRecipientsSave(e) {
+    e.preventDefault();
+    const payload = {
+        TTP: {
+            to:  asEmailList(els.agentRecipientsTtpTo.value),
+            cc:  asEmailList(els.agentRecipientsTtpCc.value),
+            bcc: asEmailList(els.agentRecipientsTtpBcc.value)
+        },
+        RELAY: {
+            to:  asEmailList(els.agentRecipientsRelayTo.value),
+            cc:  asEmailList(els.agentRecipientsRelayCc.value),
+            bcc: asEmailList(els.agentRecipientsRelayBcc.value)
+        }
+    };
+    try {
+        els.agentRecipientsSave.disabled = true;
+        const res = await api('/api/agent-recipients', { method: 'PUT', body: JSON.stringify(payload) });
+        state.agentRecipients = res.agentRecipients;
+        renderAgentRecipients();
+        const sum = (b) => b.to.length + b.cc.length + b.bcc.length;
+        toast(`Saved: TTP=${sum(payload.TTP)} addrs, RELAY=${sum(payload.RELAY)} addrs`, 'success');
+    } catch (err) {
+        if (err.status === 401) { setView(false); return; }
+        toast(err.message, 'error');
+    } finally {
+        els.agentRecipientsSave.disabled = false;
+    }
+}
+
+async function onCompSiteChange() {
+    updateCompTarget();
+    const siteName = els.compSite.value;
+    if (!siteName) {
+        state.fields = [];
+        state.fieldsSource = null;
+        renderComplianceFields();
+        return;
+    }
+    // Show a loading hint while we hit InfluxDB.
+    els.compFields.replaceChildren();
+    const hint = document.createElement('p');
+    hint.className = 'muted small';
+    hint.textContent = `Loading columns for ${siteName}…`;
+    els.compFields.append(hint);
+    try {
+        const res = await api(`/api/compliance-fields/${encodeURIComponent(siteName)}`);
+        state.fields = res.columns || [];
+        state.fieldsSource = res.source || null;
+        renderComplianceFields();
+    } catch (err) {
+        if (err.status === 401) { setView(false); return; }
+        state.fields = [];
+        state.fieldsSource = null;
+        els.compFields.replaceChildren();
+        const errEl = document.createElement('p');
+        errEl.className = 'error';
+        errEl.textContent = `Could not load columns: ${err.message}`;
+        els.compFields.append(errEl);
     }
 }
 
@@ -223,6 +368,7 @@ function renderSites() {
     for (const s of state.sites) {
         const tr = document.createElement('tr');
         appendCell(tr, s.name);
+        appendCell(tr, s.agentType || '—');
         appendCell(tr, `${s.ip}:${s.port}`);
         appendCell(tr, s.db);
         appendCell(tr, s.measurement);
@@ -316,6 +462,7 @@ function openSiteModal(site) {
         els.siteAlertFrequency.value = sched.frequency || 'daily';
         els.siteAlertTime.value = sched.time || '08:00';
         els.siteAlertDow.value = String(sched.dayOfWeek != null ? sched.dayOfWeek : 1);
+        els.siteAgentType.value = site.agentType || '';
         els.siteButlerIp.value = site.butlerIp || '';
         els.siteTargetIp.value = site.targetIp || '';
         els.siteGorPassword.value = '';
@@ -337,6 +484,7 @@ function openSiteModal(site) {
         els.siteAlertFrequency.value = 'daily';
         els.siteAlertTime.value = '08:00';
         els.siteAlertDow.value = '1';
+        els.siteAgentType.value = '';
         els.siteButlerIp.value = '';
         els.siteTargetIp.value = '';
         els.siteGorPassword.value = '';
@@ -372,6 +520,7 @@ async function onSiteSave(e) {
             time: els.siteAlertTime.value,
             dayOfWeek: Number(els.siteAlertDow.value)
         },
+        agentType: els.siteAgentType.value,
         butlerIp: els.siteButlerIp.value.trim(),
         targetIp: els.siteTargetIp.value.trim()
     };
@@ -451,6 +600,19 @@ function renderCompliancePicker() {
 
 function renderComplianceFields() {
     els.compFields.replaceChildren();
+    if (!state.fields || state.fields.length === 0) {
+        const hint = document.createElement('p');
+        hint.className = 'muted small';
+        hint.textContent = 'Pick a site above to load its compliance columns.';
+        els.compFields.append(hint);
+        return;
+    }
+    if (state.fieldsSource === 'fallback') {
+        const banner = document.createElement('p');
+        banner.className = 'muted small';
+        banner.textContent = 'Site has no data yet — showing the default field set as a fallback.';
+        els.compFields.append(banner);
+    }
     for (const field of state.fields) {
         const label = document.createElement('label');
         if (field === 'api_version') label.classList.add('required');
@@ -483,8 +645,13 @@ async function onCompSubmit(e) {
         const v = input.value.trim();
         if (v) fields[input.name] = v;
     }
-    if (!fields.api_version) {
+    // Only require api_version when it's actually in this site's column set.
+    if (state.fields.includes('api_version') && !fields.api_version) {
         toast('api_version is required', 'warn');
+        return;
+    }
+    if (Object.keys(fields).length === 0) {
+        toast('Fill at least one field', 'warn');
         return;
     }
 

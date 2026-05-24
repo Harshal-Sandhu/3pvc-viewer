@@ -158,4 +158,15 @@ function parseInventoryPorts(text) {
     return ports;
 }
 
-module.exports = { parseInventory, parseInventoryPorts, applyActiveIps, applyMultiSectionActiveIps, updateGroupVars };
+function parseGroupVars(text) {
+    const out = {};
+    for (const line of String(text || '').split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('---')) continue;
+        const m = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.+?)\s*$/);
+        if (m) out[m[1]] = m[2];
+    }
+    return out;
+}
+
+module.exports = { parseInventory, parseInventoryPorts, applyActiveIps, applyMultiSectionActiveIps, updateGroupVars, parseGroupVars };

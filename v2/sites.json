@@ -4,14 +4,16 @@
     "port": 8086,
     "db": "GreyOrange",
     "measurement": "bot_firmware_version_details",
-    "releasedVdaVersion": "2.1.0-test"
+    "releasedVdaVersion": "2.1.0-test",
+    "agentType": "RELAY"
   },
   "walmartpot_staging": {
     "ip": "172.28.48.195",
     "port": 8086,
     "db": "GreyOrange",
     "measurement": "bot_firmware_version_details",
-    "releasedVdaVersion": ""
+    "releasedVdaVersion": "",
+    "agentType": "RELAY"
   },
   "Apotek_inc_server": {
     "ip": "192.168.234.212",
@@ -31,7 +33,8 @@
     },
     "butlerIp": "192.168.234.217",
     "targetIp": "10.95.244.15",
-    "gorPassword": "apj0702"
+    "gorPassword": "apj0702",
+    "agentType": "RELAY"
   },
   "adams_beverages": {
     "ip": "172.28.79.20",
@@ -54,7 +57,11 @@
     "ip": "192.168.234.10",
     "port": 8086,
     "db": "GreyOrange",
-    "measurement": "bot_firmware_version_details"
+    "measurement": "bot_firmware_version_details",
+    "gpmsBridgeIp": "10.95.244.10",
+    "butlerIp": "192.168.234.14",
+    "targetIp": "10.95.244.10",
+    "gorPassword": "apj0702"
   },
   "casey": {
     "ip": "172.28.108.15",
@@ -96,13 +103,23 @@
     "ip": "172.28.76.138",
     "port": 8086,
     "db": "GreyOrange",
-    "measurement": "bot_firmware_version_details"
+    "measurement": "bot_firmware_version_details",
+    "gpmsBridgeIp": "172.20.244.11",
+    "butlerIp": "",
+    "targetIp": "172.20.244.11",
+    "gorPassword": "apj0702",
+    "agentType": "TTP"
   },
   "essilor_luxottica_sedico": {
     "ip": "10.13.10.142",
     "port": 8086,
     "db": "GreyOrange",
-    "measurement": "bot_firmware_version_details"
+    "measurement": "bot_firmware_version_details",
+    "gpmsBridgeIp": "10.2.33.10",
+    "butlerIp": "",
+    "targetIp": "10.2.33.10",
+    "gorPassword": "apj0702",
+    "agentType": "TTP"
   },
   "evergreen": {
     "ip": "172.28.34.24",
@@ -168,7 +185,20 @@
     "ip": "172.28.48.13",
     "port": 8086,
     "db": "GreyOrange",
-    "measurement": "bot_firmware_version_details"
+    "measurement": "bot_firmware_version_details",
+    "gpmsBridgeIp": "30.224.92.53",
+    "butlerIp": "172.28.48.16",
+    "targetIp": "30.224.92.53",
+    "gorPassword": "apj0702",
+    "agentType": "TTP",
+    "complianceMeasurement": "compliance_details",
+    "recipients": [],
+    "alertSchedule": {
+      "enabled": false,
+      "frequency": "daily",
+      "time": "08:00",
+      "dayOfWeek": 1
+    }
   },
   "sodimac_columbia": {
     "ip": "172.28.66.10",
@@ -186,7 +216,12 @@
     "ip": "172.28.68.177",
     "port": 8086,
     "db": "GreyOrange",
-    "measurement": "bot_firmware_version_details"
+    "measurement": "bot_firmware_version_details",
+    "gpmsBridgeIp": "10.201.13.140",
+    "butlerIp": "",
+    "targetIp": "10.201.13.140",
+    "gorPassword": "apj0702",
+    "agentType": "TTP"
   },
   "walmart_canada": {
     "ip": "172.28.2.13",
@@ -198,7 +233,20 @@
     "ip": "172.28.40.11",
     "port": 8086,
     "db": "GreyOrange",
-    "measurement": "bot_firmware_version_details"
+    "measurement": "bot_firmware_version_details",
+    "gpmsBridgeIp": "30.224.80.52",
+    "butlerIp": "172.28.40.13",
+    "targetIp": "30.224.80.52",
+    "gorPassword": "apj0702",
+    "agentType": "TTP",
+    "complianceMeasurement": "compliance_details",
+    "recipients": [],
+    "alertSchedule": {
+      "enabled": false,
+      "frequency": "daily",
+      "time": "08:00",
+      "dayOfWeek": 1
+    }
   },
   "wayfair": {
     "ip": "172.28.91.19",
@@ -230,5 +278,16 @@
     "targetIp": "192.168.6.34",
     "gorPassword": "apj0702",
     "botSudoPassword": "apj0702"
+  },
+  "xpo_handm": {
+    "ip": "172.19.40.56",
+    "port": 8086,
+    "db": "GreyOrange",
+    "measurement": "bot_firmware_version_details",
+    "gpmsBridgeIp": "172.25.117.243",
+    "butlerIp": "172.19.40.54",
+    "targetIp": "172.25.117.243",
+    "gorPassword": "apj0702",
+    "agentType": "TTP"
   }
 }
