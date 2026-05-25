@@ -222,7 +222,7 @@ function getCellValue(row, col) {
 // bot's api_version, or null if no match. `time` is dropped; everything else
 // the site's compliance row records is included.
 function getExpectedPairsForRow(row) {
-    const apiIdx = state.columns.indexOf('api_version');
+    const apiIdx = state.columns.indexOf(versionField());
     if (apiIdx === -1 || row[apiIdx] == null) return null;
     const compRow = getComplianceByApi().get(String(row[apiIdx]));
     if (!compRow) return null;
@@ -516,10 +516,10 @@ function getComplianceByApi() {
     if (_complianceByApi) return _complianceByApi;
     const map = new Map();
     const c = state.compliance;
-    const apiIdx = c.columns.indexOf('api_version');
+    const apiIdx = c.columns.indexOf(versionField());
     if (apiIdx === -1) { _complianceByApi = map; return map; }
     // compliance is fetched ORDER BY time DESC, so the first row seen for an
-    // api_version is the most recent — keep that one.
+    // version key is the most recent — keep that one.
     for (const row of c.rows) {
         const api = row[apiIdx];
         if (api == null) continue;
@@ -531,7 +531,7 @@ function getComplianceByApi() {
 }
 
 function getExpectedVdaForRow(row) {
-    const apiIdx = state.columns.indexOf('api_version');
+    const apiIdx = state.columns.indexOf(versionField());
     if (apiIdx === -1) return null;
     const api = row[apiIdx];
     if (api == null) return null;
@@ -543,24 +543,36 @@ function getExpectedVdaForRow(row) {
 }
 
 // Fields not considered when computing a diff against compliance_details.
-const DIFF_IGNORE = new Set(['time', 'api_version']);
+// Per-site version-key column: TTP sites use `version`, everything else uses
+// `api_version`. The site object comes from /api/sites which now exposes
+// agentType.
+function versionField() {
+    return state.selectedSite && state.selectedSite.agentType === 'TTP' ? 'version' : 'api_version';
+}
+const DIFF_IGNORE_BASE = new Set(['time']);
+function diffIgnoreSet() {
+    const s = new Set(DIFF_IGNORE_BASE);
+    s.add(versionField());
+    return s;
+}
 
 // Returns { ref: complianceRow | null, diffs: [{field, actual, expected}] }
 // - ref === null: no compliance row matched this bot's api_version (status unknown)
 // - diffs === []: every overlapping field matched the compliance record
 // - diffs.length > 0: at least one overlapping field differs
 function getDiffForRow(row) {
-    const apiIdx = state.columns.indexOf('api_version');
+    const apiIdx = state.columns.indexOf(versionField());
     if (apiIdx === -1) return { ref: null, diffs: [] };
     const api = row[apiIdx];
     if (api == null) return { ref: null, diffs: [] };
     const compRow = getComplianceByApi().get(String(api));
     if (!compRow) return { ref: null, diffs: [] };
 
+    const ignore = diffIgnoreSet();
     const diffs = [];
     for (let i = 0; i < state.columns.length; i++) {
         const col = state.columns[i];
-        if (DIFF_IGNORE.has(col)) continue;
+        if (ignore.has(col)) continue;
         const ci = state.compliance.columns.indexOf(col);
         if (ci === -1) continue;  // compliance doesn't track this field — skip
         const actual = row[i];
@@ -1068,9 +1080,10 @@ function renderStats(rows) {
     const vdaSet = vdaIdx === -1 ? new Set() : new Set(rows.map(r => r[vdaIdx]).filter(v => v != null));
     els.stats.vda.textContent = String(vdaSet.size);
 
+    const vf = versionField();
     const haveCompliance = state.compliance.rows.length > 0
-        && state.compliance.columns.indexOf('api_version') !== -1
-        && state.columns.indexOf('api_version') !== -1;
+        && state.compliance.columns.indexOf(vf) !== -1
+        && state.columns.indexOf(vf) !== -1;
 
     if (haveCompliance) {
         let m = 0, x = 0;
@@ -1225,7 +1238,7 @@ function renderChart(rows) {
 function renderVdaAlerts(rows) {
     const botIdx = state.columns.indexOf('bot_id');
     const ipIdx = state.columns.indexOf('ip');
-    const apiIdx = state.columns.indexOf('api_version');
+    const apiIdx = state.columns.indexOf(versionField());
 
     if (apiIdx === -1 || rows.length === 0 || state.compliance.rows.length === 0) {
         els.vdaAlertSection.hidden = true;
@@ -1486,9 +1499,10 @@ function showDetail(row) {
         ? `Bot: ${row[botIdx]}`
         : 'Row details';
 
-    // Find the matched compliance reference row by api_version, if any.
-    const apiIdx = state.columns.indexOf('api_version');
-    const cApiIdx = state.compliance.columns.indexOf('api_version');
+    // Find the matched compliance reference row by the site's version key, if any.
+    const vf = versionField();
+    const apiIdx = state.columns.indexOf(vf);
+    const cApiIdx = state.compliance.columns.indexOf(vf);
     let compRow = null;
     if (apiIdx !== -1 && cApiIdx !== -1 && row[apiIdx] != null) {
         compRow = getComplianceByApi().get(String(row[apiIdx])) || null;

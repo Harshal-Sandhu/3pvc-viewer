@@ -45,6 +45,7 @@
                         <tr>
                             <th>Name</th>
                             <th>Agent</th>
+                            <th>Vendor</th>
                             <th>Host</th>
                             <th>Database</th>
                             <th>Main measurement</th>
@@ -162,6 +163,14 @@
                         <option value="RELAY">RELAY</option>
                     </select>
                     <span class="hint">Bot agent running at this site. Used to group/distinguish sites in the viewer.</span>
+                </label>
+                <label>Vendor
+                    <select id="site-vendor">
+                        <option value="">— unspecified —</option>
+                        <option value="QT">QT (Quicktron)</option>
+                        <option value="HAI">HAI</option>
+                    </select>
+                    <span class="hint">Bot vendor. Determines the maintenance commands (QT uses systemd; HAI uses supervisorctl).</span>
                 </label>
                 <label>Host (IP or hostname)
                     <input type="text" id="site-ip" required placeholder="e.g. 192.168.1.10">

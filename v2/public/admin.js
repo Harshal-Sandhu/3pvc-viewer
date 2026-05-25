@@ -34,6 +34,7 @@ const els = {
     siteAlertDow: $('#site-alert-dow'),
     siteAlertDowWrap: $('#site-alert-dow-wrap'),
     siteAgentType: $('#site-agent-type'),
+    siteVendor: $('#site-vendor'),
     siteButlerIp: $('#site-butler-ip'),
     siteTargetIp: $('#site-target-ip'),
     siteGorPassword: $('#site-gor-password'),
@@ -369,6 +370,7 @@ function renderSites() {
         const tr = document.createElement('tr');
         appendCell(tr, s.name);
         appendCell(tr, s.agentType || '—');
+        appendCell(tr, s.vendor || '—');
         appendCell(tr, `${s.ip}:${s.port}`);
         appendCell(tr, s.db);
         appendCell(tr, s.measurement);
@@ -463,6 +465,7 @@ function openSiteModal(site) {
         els.siteAlertTime.value = sched.time || '08:00';
         els.siteAlertDow.value = String(sched.dayOfWeek != null ? sched.dayOfWeek : 1);
         els.siteAgentType.value = site.agentType || '';
+        els.siteVendor.value = site.vendor || '';
         els.siteButlerIp.value = site.butlerIp || '';
         els.siteTargetIp.value = site.targetIp || '';
         els.siteGorPassword.value = '';
@@ -485,6 +488,7 @@ function openSiteModal(site) {
         els.siteAlertTime.value = '08:00';
         els.siteAlertDow.value = '1';
         els.siteAgentType.value = '';
+        els.siteVendor.value = '';
         els.siteButlerIp.value = '';
         els.siteTargetIp.value = '';
         els.siteGorPassword.value = '';
@@ -521,6 +525,7 @@ async function onSiteSave(e) {
             dayOfWeek: Number(els.siteAlertDow.value)
         },
         agentType: els.siteAgentType.value,
+        vendor: els.siteVendor.value,
         butlerIp: els.siteButlerIp.value.trim(),
         targetIp: els.siteTargetIp.value.trim()
     };

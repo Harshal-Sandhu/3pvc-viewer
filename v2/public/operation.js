@@ -67,6 +67,7 @@ const els = {
     mtForm: $('#mt-form'),
     mtSection: $('#mt-section'),
     mtCommand: $('#mt-command'),
+    mtCommandHint: $('#mt-command-hint'),
     mtIpsWrap: $('#mt-ips-wrap'),
     mtIpsList: $('#mt-ips-list'),
     mtIpsAll: $('#mt-ips-all'),
@@ -1311,6 +1312,50 @@ async function applySiteSelection(site) {
     updateLoadButton();
     updateSummary();
     updateOpsCard();
+    // Load the vendor-specific maintenance command list for this site.
+    loadMaintenanceCommands(site).catch(err => console.error('maintenance commands', err));
+}
+
+async function loadMaintenanceCommands(site) {
+    const sel = els.mtCommand;
+    if (!sel) return;
+    sel.replaceChildren();
+    sel.disabled = true;
+    els.mtCommandHint.textContent = 'Loading commands…';
+    try {
+        const r = await api(`/api/operations/maintenance-commands?site=${encodeURIComponent(site.name)}`);
+        const vendor = r.vendor || '(unset)';
+        const cmds = r.commands || [];
+        if (cmds.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = vendor === '(unset)'
+                ? 'No vendor set on this site — set QT or HAI in admin'
+                : `No commands configured for vendor ${vendor}`;
+            sel.append(opt);
+            sel.disabled = true;
+            els.mtCommandHint.textContent = vendor === '(unset)'
+                ? 'Pick a site whose vendor is set, or update this one in admin.'
+                : `Vendor ${vendor}: no maintenance commands registered.`;
+            return;
+        }
+        for (const name of cmds) {
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            sel.append(opt);
+        }
+        sel.disabled = false;
+        els.mtCommandHint.textContent = `Vendor: ${vendor} (${cmds.length} commands)`;
+    } catch (err) {
+        sel.replaceChildren();
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'Failed to load commands';
+        sel.append(opt);
+        sel.disabled = true;
+        els.mtCommandHint.textContent = 'Error: ' + err.message;
+    }
 }
 
 function resetBotSelect(placeholder) {

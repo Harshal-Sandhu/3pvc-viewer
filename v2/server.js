@@ -228,6 +228,7 @@ function siteToPublic(name, s) {
         targetIp: s.targetIp || '',
         gpmsBridgeIp: s.gpmsBridgeIp || '',
         agentType: s.agentType || '',
+        vendor: s.vendor || '',
         hasGorPassword: !!s.gorPassword,
         hasBotSudoPassword: !!s.botSudoPassword
     };
@@ -453,6 +454,9 @@ function validateSiteFields(body, { allowName = false } = {}) {
     if (body.agentType != null && body.agentType !== '') {
         if (!VALID_AGENT_TYPES.has(body.agentType)) errors.push('agentType must be TTP or RELAY');
     }
+    if (body.vendor != null && body.vendor !== '') {
+        if (!VALID_VENDORS.has(body.vendor)) errors.push('vendor must be QT or HAI');
+    }
     return errors;
 }
 
@@ -484,6 +488,7 @@ app.post('/api/sites', requireAdmin, (req, res) => {
         targetIp: (body.targetIp || '').trim(),
         gpmsBridgeIp: (body.gpmsBridgeIp || '').trim(),
         agentType: (body.agentType || '').trim(),
+        vendor: (body.vendor || '').trim(),
         gorPassword: (body.gorPassword || '').trim(),
         botSudoPassword: (body.botSudoPassword || '').trim()
     };
@@ -525,6 +530,7 @@ app.put('/api/sites/:name', requireAdmin, (req, res) => {
     if (body.targetIp != null) s.targetIp = body.targetIp.trim();
     if (body.gpmsBridgeIp != null) s.gpmsBridgeIp = body.gpmsBridgeIp.trim();
     if (body.agentType != null) s.agentType = body.agentType.trim();
+    if (body.vendor != null) s.vendor = body.vendor.trim();
     if (body.gorPassword != null && body.gorPassword !== '') s.gorPassword = body.gorPassword.trim();
     if (body.botSudoPassword != null && body.botSudoPassword !== '') s.botSudoPassword = body.botSudoPassword.trim();
 
@@ -1165,12 +1171,32 @@ app.post('/api/operations/ping-bot', requireAuth, async (req, res) => {
     }
 });
 
-const MAINTENANCE_COMMANDS = {
-    vdarestart: { sudo: true,  cmd: 'systemctl restart vda_remote.service' },
-    vdastop:    { sudo: true,  cmd: 'systemctl stop vda_remote.service' },
-    vdastart:   { sudo: true,  cmd: 'systemctl start vda_remote.service' },
-    savelog:    { sudo: false, cmd: 'bash /home/gor/save_all_logs_ttp.sh' }
+// Maintenance commands per vendor. QT uses systemd; HAI uses supervisor.
+// When sudo:true, the wrapper does  echo $sudoPassword | sudo -S <cmd>.
+const MAINTENANCE_COMMANDS_BY_VENDOR = {
+    QT: {
+        vdarestart: { sudo: true,  cmd: 'systemctl restart vda_remote.service' },
+        vdastop:    { sudo: true,  cmd: 'systemctl stop vda_remote.service' },
+        vdastart:   { sudo: true,  cmd: 'systemctl start vda_remote.service' },
+        savelog:    { sudo: false, cmd: 'bash /home/gor/save_all_logs_ttp.sh' }
+    },
+    // HAI bots — aliases collected from gor@htm_110 (HAI HTM bot).
+    HAI: {
+        vdarestart:   { sudo: true,  cmd: 'supervisorctl restart vda_remote' },
+        vdastop:      { sudo: true,  cmd: 'supervisorctl stop vda_remote' },
+        vdastart:     { sudo: true,  cmd: 'supervisorctl start vda_remote' },
+        vdastatus:    { sudo: true,  cmd: 'supervisorctl status vda_remote' },
+        savelog:      { sudo: false, cmd: '/bin/bash /home/gor/save_all_logs_ttp.sh' },
+        fwv:          { sudo: false, cmd: '/bin/bash /home/gor/vda_remote/get_fw_version.sh' },
+        navrestart:   { sudo: true,  cmd: 'supervisorctl restart nav_process' },
+        ipurestart:   { sudo: true,  cmd: 'supervisorctl restart camera_server_ipu' },
+        kubotrestart: { sudo: true,  cmd: '/etc/kubot_application.sh restart' }
+    }
 };
+const VALID_VENDORS = new Set(['', 'QT', 'HAI']);
+function commandsForVendor(vendor) {
+    return MAINTENANCE_COMMANDS_BY_VENDOR[vendor] || {};
+}
 
 function shellQuote(s) {
     return "'" + String(s).replace(/'/g, "'\\''") + "'";
@@ -1179,6 +1205,18 @@ function shellQuote(s) {
 const MAINTENANCE_PER_BOT_TIMEOUT_MS = 2 * 60 * 1000;
 const MAINTENANCE_REQ_TIMEOUT_MS    = 30 * 60 * 1000;
 const MAINTENANCE_CONCURRENCY       = 7;
+
+// Returns the list of available maintenance command names for a given site,
+// based on its vendor. Frontend uses this to populate the dropdown.
+app.get('/api/operations/maintenance-commands', requireAuth, (req, res) => {
+    const siteName = req.query && req.query.site;
+    if (typeof siteName !== 'string' || !sites[siteName]) {
+        return res.status(400).json({ error: 'Unknown site' });
+    }
+    const vendor = sites[siteName].vendor || '';
+    const commands = Object.keys(commandsForVendor(vendor));
+    res.json({ vendor, commands });
+});
 
 app.post(
     '/api/operations/bot/run',
@@ -1192,9 +1230,20 @@ app.post(
         const siteName = req.body && req.body.site;
         const cfg = siteOpsConfig(siteName);
         if (cfg.error) return res.status(400).json({ error: cfg.error });
+        const site = sites[siteName];
+        const vendor = site && site.vendor;
+        if (!vendor) {
+            return res.status(400).json({ error: `Site "${siteName}" has no vendor configured. Set it (QT/HAI) in the admin form.` });
+        }
+        const commandMap = commandsForVendor(vendor);
         const command = String(req.body.command || '');
-        if (!Object.prototype.hasOwnProperty.call(MAINTENANCE_COMMANDS, command)) {
-            return res.status(400).json({ error: `Unknown command. Allowed: ${Object.keys(MAINTENANCE_COMMANDS).join(', ')}` });
+        if (!Object.prototype.hasOwnProperty.call(commandMap, command)) {
+            const allowed = Object.keys(commandMap);
+            return res.status(400).json({
+                error: allowed.length
+                    ? `Unknown command for vendor ${vendor}. Allowed: ${allowed.join(', ')}`
+                    : `No maintenance commands configured for vendor ${vendor}`
+            });
         }
         const selections = (req.body && req.body.selections) || {};
         if (typeof selections !== 'object' || Array.isArray(selections)) {
@@ -1246,7 +1295,7 @@ app.post(
             res.write(JSON.stringify(obj) + '\n');
         };
 
-        const spec = MAINTENANCE_COMMANDS[command];
+        const spec = commandMap[command];
         const sudoPassword = sites[siteName].botSudoPassword || cfg.opts.gorPassword;
         const shellCmd = spec.sudo
             ? `echo ${shellQuote(sudoPassword)} | sudo -S ${spec.cmd}`

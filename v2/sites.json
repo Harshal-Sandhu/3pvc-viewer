@@ -5,7 +5,8 @@
     "db": "GreyOrange",
     "measurement": "bot_firmware_version_details",
     "releasedVdaVersion": "2.1.0-test",
-    "agentType": "RELAY"
+    "agentType": "RELAY",
+    "vendor": "QT"
   },
   "walmartpot_staging": {
     "ip": "172.28.48.195",
@@ -13,7 +14,20 @@
     "db": "GreyOrange",
     "measurement": "bot_firmware_version_details",
     "releasedVdaVersion": "",
-    "agentType": "RELAY"
+    "agentType": "RELAY",
+    "vendor": "HAI",
+    "complianceMeasurement": "compliance_details",
+    "recipients": [],
+    "alertSchedule": {
+      "enabled": false,
+      "frequency": "daily",
+      "time": "08:00",
+      "dayOfWeek": 1
+    },
+    "butlerIp": "172.28.48.194",
+    "targetIp": "30.224.92.251",
+    "gorPassword": "apj0702",
+    "botSudoPassword": "apj0702"
   },
   "Apotek_inc_server": {
     "ip": "192.168.234.212",
@@ -34,7 +48,8 @@
     "butlerIp": "192.168.234.217",
     "targetIp": "10.95.244.15",
     "gorPassword": "apj0702",
-    "agentType": "RELAY"
+    "agentType": "RELAY",
+    "vendor": "QT"
   },
   "adams_beverages": {
     "ip": "172.28.79.20",
@@ -61,7 +76,17 @@
     "gpmsBridgeIp": "10.95.244.10",
     "butlerIp": "192.168.234.14",
     "targetIp": "10.95.244.10",
-    "gorPassword": "apj0702"
+    "gorPassword": "apj0702",
+    "vendor": "QT",
+    "complianceMeasurement": "compliance_details",
+    "recipients": [],
+    "alertSchedule": {
+      "enabled": false,
+      "frequency": "daily",
+      "time": "08:00",
+      "dayOfWeek": 1
+    },
+    "agentType": "RELAY"
   },
   "casey": {
     "ip": "172.28.108.15",
@@ -108,7 +133,16 @@
     "butlerIp": "",
     "targetIp": "172.20.244.11",
     "gorPassword": "apj0702",
-    "agentType": "TTP"
+    "agentType": "TTP",
+    "complianceMeasurement": "compliance_details",
+    "recipients": [],
+    "alertSchedule": {
+      "enabled": false,
+      "frequency": "daily",
+      "time": "08:00",
+      "dayOfWeek": 1
+    },
+    "vendor": "HAI"
   },
   "essilor_luxottica_sedico": {
     "ip": "10.13.10.142",
@@ -119,7 +153,16 @@
     "butlerIp": "",
     "targetIp": "10.2.33.10",
     "gorPassword": "apj0702",
-    "agentType": "TTP"
+    "agentType": "TTP",
+    "complianceMeasurement": "compliance_details",
+    "recipients": [],
+    "alertSchedule": {
+      "enabled": false,
+      "frequency": "daily",
+      "time": "08:00",
+      "dayOfWeek": 1
+    },
+    "vendor": "HAI"
   },
   "evergreen": {
     "ip": "172.28.34.24",
@@ -198,7 +241,8 @@
       "frequency": "daily",
       "time": "08:00",
       "dayOfWeek": 1
-    }
+    },
+    "vendor": "HAI"
   },
   "sodimac_columbia": {
     "ip": "172.28.66.10",

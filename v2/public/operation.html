@@ -172,13 +172,10 @@
                         </select>
                     </label>
                     <label>Command
-                        <select id="mt-command">
-                            <option value="vdarestart">vdarestart — sudo systemctl restart vda_remote</option>
-                            <option value="vdastop">vdastop — sudo systemctl stop vda_remote</option>
-                            <option value="vdastart">vdastart — sudo systemctl start vda_remote</option>
-                            <option value="savelog">savelog — bash /home/gor/save_all_logs_ttp.sh</option>
+                        <select id="mt-command" disabled>
+                            <option value="">Pick a site first…</option>
                         </select>
-                        <span class="hint">Same alias commands defined on the bots.</span>
+                        <span class="hint" id="mt-command-hint">Command list depends on the site's vendor (QT/HAI).</span>
                     </label>
                 </div>
                 <div id="mt-ips-wrap" style="margin-top:0.75rem;" hidden>

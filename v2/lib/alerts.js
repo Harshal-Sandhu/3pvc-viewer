@@ -16,8 +16,14 @@
 const ExcelJS = require('exceljs');
 const nodemailer = require('nodemailer');
 
-// Same set as on the frontend.
-const DIFF_IGNORE = new Set(['time', 'api_version']);
+// Always-ignored columns. The site's version-key column (api_version or version)
+// is added at runtime — it's the lookup key, not a comparable field.
+const DIFF_IGNORE_BASE = new Set(['time']);
+
+// TTP sites use `version` as the compliance key; everything else uses `api_version`.
+function versionFieldFor(site) {
+    return site && site.agentType === 'TTP' ? 'version' : 'api_version';
+}
 
 const INFLUX_TIMEOUT_MS = 20000;
 // Reports include the last 24h of bot snapshots. Within that window we still
@@ -46,13 +52,13 @@ async function queryInflux(site, q) {
     }
 }
 
-// Returns Map<api_version, complianceRow>. Most recent row wins per api_version.
-function indexCompliance(complianceTable) {
+// Returns Map<versionKey, complianceRow>. Most recent row wins per key.
+function indexCompliance(complianceTable, versionField) {
     const out = new Map();
-    const apiIdx = complianceTable.columns.indexOf('api_version');
-    if (apiIdx === -1) return out;
+    const keyIdx = complianceTable.columns.indexOf(versionField);
+    if (keyIdx === -1) return out;
     for (const row of complianceTable.rows) {
-        const v = row[apiIdx];
+        const v = row[keyIdx];
         if (v == null) continue;
         const key = String(v);
         if (!out.has(key)) out.set(key, row);
@@ -61,19 +67,19 @@ function indexCompliance(complianceTable) {
 }
 
 // For one bot row, returns { ref, diffs[{ field, actual, expected }] }.
-// ref === null means no compliance row matched (unknown api_version).
-function diffRow(botColumns, botRow, complianceTable, complianceIndex) {
-    const apiIdx = botColumns.indexOf('api_version');
-    if (apiIdx === -1) return { ref: null, diffs: [] };
-    const api = botRow[apiIdx];
-    if (api == null) return { ref: null, diffs: [] };
-    const compRow = complianceIndex.get(String(api));
+// ref === null means no compliance row matched (Dead).
+function diffRow(botColumns, botRow, complianceTable, complianceIndex, versionField) {
+    const keyIdx = botColumns.indexOf(versionField);
+    if (keyIdx === -1) return { ref: null, diffs: [] };
+    const v = botRow[keyIdx];
+    if (v == null) return { ref: null, diffs: [] };
+    const compRow = complianceIndex.get(String(v));
     if (!compRow) return { ref: null, diffs: [] };
 
     const diffs = [];
     for (let i = 0; i < botColumns.length; i++) {
         const col = botColumns[i];
-        if (DIFF_IGNORE.has(col)) continue;
+        if (DIFF_IGNORE_BASE.has(col) || col === versionField) continue;
         const ci = complianceTable.columns.indexOf(col);
         if (ci === -1) continue;
         const actual = botRow[i];
@@ -91,6 +97,7 @@ function diffRow(botColumns, botRow, complianceTable, complianceIndex) {
 async function buildReport(siteName, site) {
     const measurement = site.measurement;
     const complianceMeasurement = site.complianceMeasurement || 'compliance_details';
+    const versionField = versionFieldFor(site);
 
     const mainQ = `SELECT * FROM "${measurement}" WHERE time > now() - ${MAIN_LOOKBACK} ORDER BY time DESC LIMIT ${ROW_LIMIT}`;
     const compQ = `SELECT * FROM "${complianceMeasurement}" ORDER BY time DESC LIMIT 500`;
@@ -106,7 +113,7 @@ async function buildReport(siteName, site) {
     // row that actually reports a real api_version. If a bot has only dead_bot
     // rows in the window, we still keep one so the report shows it as Unknown.
     const botIdx = bots.columns.indexOf('bot_id');
-    const apiIdxMain = bots.columns.indexOf('api_version');
+    const apiIdxMain = bots.columns.indexOf(versionField);
     const isUsableApi = (v) => v != null && String(v).trim() !== '' && String(v).trim().toLowerCase() !== 'dead_bot';
     let uniqueRows = bots.rows;
     if (botIdx !== -1) {
@@ -126,22 +133,26 @@ async function buildReport(siteName, site) {
         }
     }
 
-    const complianceIndex = indexCompliance(compliance);
+    const complianceIndex = indexCompliance(compliance, versionField);
 
     let compatible = 0;
     let incompatible = 0;
     let unknown = 0;
     const mismatches = []; // [{ bot_id, ip, api_version, diffs: [{field, actual, expected}], expected: [[field, value]] }]
 
+    const versionIdxMain = bots.columns.indexOf(versionField);
     for (const row of uniqueRows) {
-        const { ref, diffs } = diffRow(bots.columns, row, compliance, complianceIndex);
+        const { ref, diffs } = diffRow(bots.columns, row, compliance, complianceIndex, versionField);
         if (!ref) { unknown++; continue; }
         if (diffs.length === 0) { compatible++; continue; }
         incompatible++;
         mismatches.push({
             bot_id: botIdx !== -1 ? row[botIdx] : '',
             ip: bots.columns.indexOf('ip') !== -1 ? row[bots.columns.indexOf('ip')] : '',
-            api_version: bots.columns.indexOf('api_version') !== -1 ? row[bots.columns.indexOf('api_version')] : '',
+            // We keep the field key `api_version` in the report payload regardless of site
+            // so the email/xlsx template stays uniform. The *value* comes from whichever
+            // column this site uses (`version` for TTP, `api_version` otherwise).
+            api_version: versionIdxMain !== -1 ? row[versionIdxMain] : '',
             vda_version: bots.columns.indexOf('vda_version') !== -1 ? row[bots.columns.indexOf('vda_version')] : '',
             diffs
         });
@@ -154,6 +165,7 @@ async function buildReport(siteName, site) {
         rows: uniqueRows,
         complianceIndex,
         complianceTable: compliance,
+        versionField,
         totals: { total: uniqueRows.length, compatible, incompatible, unknown }
     });
 
@@ -165,7 +177,8 @@ async function buildReport(siteName, site) {
     };
 }
 
-async function renderXlsx({ siteName, botColumns, rows, complianceTable, complianceIndex, totals }) {
+async function renderXlsx({ siteName, botColumns, rows, complianceTable, complianceIndex, totals, versionField }) {
+    versionField = versionField || 'api_version';
     const wb = new ExcelJS.Workbook();
     wb.creator = '3PVC Viewer';
     wb.created = new Date();
@@ -189,7 +202,7 @@ async function renderXlsx({ siteName, botColumns, rows, complianceTable, complia
     // Columns: bot identity + Status + every overlapping compliance field as
     // its own column (actual on top, expected as a 2nd row group inside one
     // cell would be confusing — instead we emit two columns per field).
-    const ignoreInCols = new Set(['time']);
+    const ignoreInCols = new Set(['time', versionField]);
     const trackedFields = [];
     for (const col of complianceTable.columns) {
         if (ignoreInCols.has(col)) continue;
@@ -197,7 +210,9 @@ async function renderXlsx({ siteName, botColumns, rows, complianceTable, complia
         trackedFields.push(col);
     }
 
-    const headerCells = ['bot_id', 'ip', 'api_version', 'status', 'diff_count', ...trackedFields.flatMap(f => [f, `${f} (expected)`])];
+    // Column header uses the site's actual version-key name so the xlsx is
+    // self-explanatory (api_version for legacy / RELAY, version for TTP).
+    const headerCells = ['bot_id', 'ip', versionField, 'status', 'diff_count', ...trackedFields.flatMap(f => [f, `${f} (expected)`])];
     detail.addRow(headerCells);
     const headerRow = detail.getRow(1);
     headerRow.font = { bold: true };
@@ -210,7 +225,7 @@ async function renderXlsx({ siteName, botColumns, rows, complianceTable, complia
 
     const botIdx = botColumns.indexOf('bot_id');
     const ipIdx = botColumns.indexOf('ip');
-    const apiIdx = botColumns.indexOf('api_version');
+    const apiIdx = botColumns.indexOf(versionField);
 
     const badFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
     const okFill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6F4EA' } };
@@ -218,7 +233,7 @@ async function renderXlsx({ siteName, botColumns, rows, complianceTable, complia
     const diffCellFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCA5A5' } };
 
     for (const row of rows) {
-        const { ref, diffs } = diffRow(botColumns, row, complianceTable, complianceIndex);
+        const { ref, diffs } = diffRow(botColumns, row, complianceTable, complianceIndex, versionField);
         const status = !ref ? 'Dead' : (diffs.length === 0 ? 'Compatible' : 'Incompatible');
         const diffByField = new Map(diffs.map(d => [d.field, d]));
 
