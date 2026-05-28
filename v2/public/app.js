@@ -177,6 +177,9 @@ const EXPECTED_COL = 'expected_values';
 // Preferred display order. Identity columns first, then the VDA pair, then
 // every other column (firmware details, time, etc.) in InfluxDB's native order.
 const COLUMN_ORDER = ['time', 'bot_id', 'ip', 'api_version', 'vda_version'];
+// Cells in this set get explicit green/red colouring based on compliance match.
+// vda_version covers QT/RELAY/TTP; kubot_master_version covers HAI bots.
+const RELEASED_VERSION_COLS = new Set(['vda_version', 'kubot_master_version']);
 
 function getAllColumns() {
     if (state.columns.length === 0) return [];
@@ -599,21 +602,24 @@ async function loadData({ silent = false } = {}) {
         if (!silent) toast(`Invalid lookback "${prefs.lookback}". Use e.g. 30m, 48h, 3d, 2w.`, 'warn');
         return;
     }
-    const q = `SELECT * FROM "${site.measurement}" WHERE time > now() - ${prefs.lookback} ORDER BY time DESC LIMIT 10000`;
+    // Skip dead snapshots at the InfluxDB query so they never enter state.rows.
+    // Belt-and-braces: we ALSO drop nulls/empties in JS after parsing, since
+    // some Influx setups won't filter null field values via `field != value`.
+    const vf = versionField();
+    const q = `SELECT * FROM "${site.measurement}" WHERE "${vf}" != 'dead_bot' AND "${vf}" != '' AND time > now() - ${prefs.lookback} ORDER BY time DESC LIMIT 10000`;
     els.load.disabled = true;
     try {
         const params = new URLSearchParams({ site: site.name, q });
-        // Kick off the secondary compliance fetch in parallel — don't block the main UI on it.
         const compliancePromise = loadCompliance({ silent: true });
         const result = await api('/api/query?' + params.toString());
         const parsed = parseInflux(result);
         if (parsed.error) throw new Error(parsed.error);
         state.columns = parsed.columns;
-        state.rows = parsed.rows;
+        state.rows = dropDeadRowsAtLoad(parsed.columns, parsed.rows, vf);
         state.lastLoadedAt = new Date();
         renderTable();
-        if (!silent) toast(`Loaded ${parsed.rows.length} rows from ${site.name}`, 'success');
-        els.exportBtn.disabled = parsed.rows.length === 0;
+        if (!silent) toast(`Loaded ${state.rows.length} alive rows from ${site.name}`, 'success');
+        els.exportBtn.disabled = state.rows.length === 0;
         updateLastRefreshed();
         await compliancePromise;
     } catch (err) {
@@ -786,19 +792,13 @@ function getVisibleColumns() {
     return getAllColumns().filter(c => !hidden.has(c));
 }
 
-function getRowsAfterUnique(rows) {
-    if (!els.uniqueOnly.checked) return rows;
-    const botIdx = state.columns.indexOf('bot_id');
-    if (botIdx === -1) return rows;
-    const seen = new Set();
-    const out = [];
-    for (const row of rows) {
-        const id = row[botIdx];
-        if (!seen.has(id)) { seen.add(id); out.push(row); }
-    }
-    return out;
-}
-
+// "Latest record per bot only" — picks each bot's most recent ALIVE row
+// (where the site's version key is set and isn't 'dead_bot'). Bots whose
+// every row in the loaded window is dead are excluded entirely — the filter
+// is "non-dead bots only, latest reading each".
+//
+// Rows are already time-desc, so the first occurrence we see for any bot id
+// is the latest in the window.
 function getRowsAfterColumnFilters(rows) {
     if (state.columnFilters.size === 0) return rows;
     const entries = Array.from(state.columnFilters.entries()).map(([col, allowed]) => ({
@@ -847,14 +847,101 @@ function getRowsAfterSort(rows) {
     });
 }
 
+// TTP sites can host both QT and HAI bots in the same measurement. The agreed
+// convention is that HAI bots carry "hai" (case-insensitive) somewhere in the
+// site's version field — drop every other row on TTP sites so the viewer +
+// reports focus on HAI bots only. RELAY (and unset) sites are untouched.
+function getRowsAfterTtpHaiFilter(rows) {
+    const site = state.selectedSite;
+    if (!site || site.agentType !== 'TTP') return rows;
+    const vIdx = state.columns.indexOf(versionField());
+    if (vIdx === -1) return rows;
+    return rows.filter(r => {
+        const v = r[vIdx];
+        return v != null && /hai/i.test(String(v));
+    });
+}
+
 function getFilteredRows() {
     let rows = state.rows;
-    rows = getRowsAfterUnique(rows);
+    rows = getRowsAfterTtpHaiFilter(rows);
+    // Always reduce to "latest non-dead row per bot" — same rule as the
+    // report builder. The "Latest record per bot only" checkbox is now a
+    // no-op (kept in markup so existing keybinding doesn't error).
+    rows = getLatestNonDeadPerBot(rows);
     rows = getRowsAfterColumnFilters(rows);
     rows = getRowsAfterQuickFilter(rows);
     rows = getRowsAfterGlobalText(rows);
     rows = getRowsAfterSort(rows);
     return rows;
+}
+
+// Filter out dead rows immediately after loading from Influx so nothing
+// downstream (table, stats, alerts panel, chart) has to know about dead bots.
+// "Dead" here = version field is null / empty / "dead_bot". Mismatch against
+// compliance is handled later — that's a separate notion.
+function dropDeadRowsAtLoad(columns, rows, vf) {
+    const vIdx = columns.indexOf(vf);
+    if (vIdx === -1) return rows;
+    return rows.filter(r => {
+        const v = r[vIdx];
+        if (v == null) return false;
+        const s = String(v).trim();
+        return s !== '' && s.toLowerCase() !== 'dead_bot';
+    });
+}
+
+// For each distinct bot_id, keep only its latest row whose status is not Dead.
+// Mirrors lib/alerts.js buildReport().
+function getLatestNonDeadPerBot(rows) {
+    const botIdx = state.columns.indexOf('bot_id');
+    const vIdx = state.columns.indexOf(versionField());
+    if (botIdx === -1) return rows;
+    const isAlive = (v) => {
+        if (v == null) return false;
+        const s = String(v).trim();
+        return s !== '' && s.toLowerCase() !== 'dead_bot';
+    };
+    const latest = new Map();
+    for (const r of rows) {
+        const id = r[botIdx];
+        if (id == null) continue;
+        if (latest.has(id)) continue;
+        if (vIdx !== -1 && !isAlive(r[vIdx])) continue;
+        // Status would compute to Dead if no compliance row matches. Drop those too.
+        if (state.compliance.rows.length > 0) {
+            const { ref } = getDiffForRow(r);
+            if (!ref) continue;
+        }
+        latest.set(id, r);
+    }
+    return [...latest.values()];
+}
+
+// Row source for the Non-compliant bots panel.
+//
+// Rule: a bot is non-compliant when its row in the window has compliance
+// MISMATCH (ref matched + at least one field differs). Dead rows are filtered
+// out at load time and never reach this function.
+// TTP/HAI filter still applies (TTP sites are scoped to HAI bots only).
+function getAlertSourceRows() {
+    const src = getRowsAfterTtpHaiFilter(state.rows);
+    const botIdx = state.columns.indexOf('bot_id');
+    if (botIdx === -1) return src;
+    // Walk time-desc; for each bot pick the most recent mismatch row.
+    const picked = new Map();
+    for (const row of src) {
+        const id = row[botIdx];
+        if (id == null) continue;
+        if (picked.has(id)) continue;
+        const { ref, diffs } = getDiffForRow(row);
+        // Skip both compliant (matched + zero diffs) and dead-by-compliance
+        // (no ref) — panel surfaces only true mismatches now.
+        if (!ref) continue;
+        if (diffs.length === 0) continue;
+        picked.set(id, row);
+    }
+    return [...picked.values()];
 }
 
 // ---------------------------------------------------------------------------
@@ -868,7 +955,9 @@ function renderTable() {
     renderChips();
     renderStats(rows);
     renderChart(rows);
-    renderVdaAlerts(rows);
+    // Alerts use their own source so the panel stays populated regardless of
+    // the "Latest record per bot only" checkbox / column filters in the table.
+    renderVdaAlerts(getAlertSourceRows());
     renderColMenu();
     updateActiveStatCard();
     els.rowCount.textContent = state.rows.length
@@ -943,6 +1032,14 @@ function renderBody(rows) {
             td.classList.add('col-' + col.replace(/[^a-zA-Z0-9_-]/g, '_'));
             if (col === 'bot_id') td.classList.add('pinned');
             if (diffFields.has(col)) td.classList.add('diff');
+            // Released-version cells: green when the field matches the
+            // compliance row, red when it differs, neutral when no compliance
+            // row matched (i.e. bot is Dead/unknown).
+            //   vda_version           — QT / RELAY / TTP main released version
+            //   kubot_master_version  — HAI bots' equivalent
+            if (RELEASED_VERSION_COLS.has(col) && ref) {
+                td.classList.add(diffFields.has(col) ? 'cell-mismatch' : 'cell-match');
+            }
             if (col === STATUS_COL) {
                 const pill = document.createElement('span');
                 pill.className = 'status-pill';
@@ -1231,8 +1328,12 @@ function renderChart(rows) {
 }
 
 // ---------------------------------------------------------------------------
-// VDA Version Alerts panel (ported from legacy 3pvc viewer)
-// Lists every bot whose vda_version differs from the site's released version.
+// Non-compliant bots panel (formerly "VDA Version Alerts").
+// A bot is non-compliant if either:
+//   - it has a compliance row matched but at least one tracked field differs
+//     ("mismatch"), OR
+//   - it has NO compliance row matched at all ("dead" — no usable
+//     api_version / version reported at script time).
 // ---------------------------------------------------------------------------
 
 function renderVdaAlerts(rows) {
@@ -1240,41 +1341,52 @@ function renderVdaAlerts(rows) {
     const ipIdx = state.columns.indexOf('ip');
     const apiIdx = state.columns.indexOf(versionField());
 
-    if (apiIdx === -1 || rows.length === 0 || state.compliance.rows.length === 0) {
-        els.vdaAlertSection.hidden = true;
+    // The panel is always visible whenever a site is selected — every site
+    // should advertise its non-compliant set (or its 0-count) up front.
+    const hasSite = !!state.selectedSite;
+    els.vdaAlertSection.hidden = !hasSite;
+    if (!hasSite) {
         els.vdaAlertList.replaceChildren();
+        els.vdaAlertCount.textContent = '0';
         return;
     }
 
-    // Group by bot_id; show the most-recent mismatched record per bot.
+    // Group by bot_id; show the most-recent non-compliant record per bot.
     const seen = new Set();
     const alerts = [];
-    for (const row of rows) {
-        const { ref, diffs } = getDiffForRow(row);
-        if (!ref || diffs.length === 0) continue;
-        const botId = botIdx !== -1 ? row[botIdx] : '';
-        if (botId == null || botId === '') continue;
-        if (seen.has(botId)) continue;
-        seen.add(botId);
-        const ip = ipIdx !== -1 ? row[ipIdx] : '';
-        alerts.push({
-            botId: String(botId),
-            ip: ip == null ? '' : String(ip),
-            diffs
-        });
+    if (apiIdx !== -1) {
+        for (const row of rows) {
+            const { ref, diffs } = getDiffForRow(row);
+            const isDead = !ref;
+            const isMismatch = ref && diffs.length > 0;
+            if (!isDead && !isMismatch) continue;
+            const botId = botIdx !== -1 ? row[botIdx] : '';
+            if (botId == null || botId === '') continue;
+            if (seen.has(botId)) continue;
+            seen.add(botId);
+            const ip = ipIdx !== -1 ? row[ipIdx] : '';
+            alerts.push({
+                botId: String(botId),
+                ip: ip == null ? '' : String(ip),
+                kind: isDead ? 'dead' : 'mismatch',
+                diffs: isDead ? [] : diffs
+            });
+        }
     }
 
+    els.vdaAlertCount.textContent = String(alerts.length);
+    els.vdaAlertList.replaceChildren();
     if (alerts.length === 0) {
-        els.vdaAlertSection.hidden = true;
-        els.vdaAlertList.replaceChildren();
+        const empty = document.createElement('div');
+        empty.className = 'alert-empty muted';
+        empty.textContent = state.rows.length === 0
+            ? 'Load data to evaluate non-compliant bots.'
+            : 'No non-compliant bots in the current window.';
+        els.vdaAlertList.append(empty);
         return;
     }
 
-    els.vdaAlertSection.hidden = false;
-    els.vdaAlertCount.textContent = String(alerts.length);
-
     const MAX_DIFFS_PER_BOT = 6;
-    els.vdaAlertList.replaceChildren();
     const frag = document.createDocumentFragment();
     for (const a of alerts) {
         const item = document.createElement('div');
@@ -1297,9 +1409,20 @@ function renderVdaAlerts(rows) {
 
         const meta = document.createElement('span');
         meta.className = 'alert-meta';
-        meta.textContent = `${a.diffs.length} field${a.diffs.length === 1 ? '' : 's'} differ`;
+        if (a.kind === 'dead') {
+            meta.textContent = `Dead — no ${versionField()} reported`;
+            meta.classList.add('alert-meta-dead');
+        } else {
+            meta.textContent = `${a.diffs.length} field${a.diffs.length === 1 ? '' : 's'} differ`;
+        }
         head.append(meta);
         item.append(head);
+
+        if (a.kind === 'dead') {
+            // No diffs to render for dead bots — the meta line above is the whole story.
+            frag.append(item);
+            continue;
+        }
 
         const diffsEl = document.createElement('div');
         diffsEl.className = 'alert-diffs';
@@ -1378,7 +1501,7 @@ function renderFilterPopList() {
     const counts = new Map();
     // Distinct values are computed from rows AFTER all OTHER filters apply
     // (so funnels behave like Excel)
-    const baseRows = getRowsAfterUnique(state.rows);
+    const baseRows = getLatestNonDeadPerBot(getRowsAfterTtpHaiFilter(state.rows));
     const otherFiltered = baseRows.filter(row => {
         for (const [c, allowed] of state.columnFilters) {
             if (c === col) continue;

@@ -12,6 +12,13 @@ const els = {
     loginError: $('#login-error'),
     who: $('#who'),
     logout: $('#logout-btn'),
+    relock: $('#relock-btn'),
+
+    unlockView: $('#unlock-view'),
+    unlockForm: $('#unlock-form'),
+    unlockPass: $('#unlock-pass'),
+    unlockBtn: $('#unlock-btn'),
+    unlockError: $('#unlock-error'),
 
     sitesBody: $('#sites-body'),
     addSiteBtn: $('#add-site-btn'),
@@ -87,6 +94,14 @@ async function api(path, opts = {}) {
     if (!res.ok) {
         const err = new Error((body && body.error) || `Request failed (${res.status})`);
         err.status = res.status;
+        err.needsUnlock = !!(body && body.needsUnlock);
+        // A server-side "needs unlock" verdict means the session has the admin
+        // role but the second auth layer expired/never granted. Drop to unlock
+        // view so the user can re-enter the passphrase.
+        if (res.status === 403 && err.needsUnlock && els.unlockView) {
+            setView('unlock');
+            setTimeout(() => els.unlockPass && els.unlockPass.focus(), 0);
+        }
         throw err;
     }
     return body;
@@ -101,9 +116,14 @@ function toast(message, kind = 'info', ms = 3500) {
     setTimeout(() => el.remove(), ms);
 }
 
-function setView(authenticated) {
-    els.loginView.hidden = authenticated;
-    els.adminView.hidden = !authenticated;
+// Three view states:
+//   not authenticated   → loginView
+//   admin + locked      → unlockView  (asks for the extra passphrase)
+//   admin + unlocked    → adminView   (full admin UI)
+function setView(state) {
+    els.loginView.hidden  = state !== 'login';
+    els.unlockView.hidden = state !== 'unlock';
+    els.adminView.hidden  = state !== 'admin';
 }
 
 // ---------------------------------------------------------------------------
@@ -115,17 +135,24 @@ async function init() {
     const me = await api('/api/me').catch(() => ({ authenticated: false }));
     if (me.authenticated && me.role === 'admin') {
         els.who.textContent = me.user || '';
-        setView(true);
-        await refreshAll();
+        // Check the second auth layer.
+        const status = await api('/api/admin/unlock-status').catch(() => ({ unlocked: false }));
+        if (status.unlocked) {
+            setView('admin');
+            await refreshAll();
+        } else {
+            setView('unlock');
+            setTimeout(() => els.unlockPass && els.unlockPass.focus(), 0);
+        }
     } else if (me.authenticated) {
         showAccessDenied(me.user);
     } else {
-        setView(false);
+        setView('login');
     }
 }
 
 function showAccessDenied(user) {
-    setView(false);
+    setView('login');
     els.loginError.textContent = `Signed in as "${user}" (viewer role). Admin role required — sign in with an admin account.`;
     els.loginError.hidden = false;
 }
@@ -133,6 +160,8 @@ function showAccessDenied(user) {
 function wireEvents() {
     els.loginForm.addEventListener('submit', onLogin);
     els.logout.addEventListener('click', onLogout);
+    els.unlockForm.addEventListener('submit', onUnlock);
+    els.relock.addEventListener('click', onRelock);
 
     els.addSiteBtn.addEventListener('click', () => openSiteModal(null));
     els.siteModalClose.addEventListener('click', closeSiteModal);
@@ -184,7 +213,7 @@ async function refreshAll() {
         renderAgentRecipients();
         updateCompTarget();
     } catch (err) {
-        if (err.status === 401) setView(false);
+        if (err.status === 401) setView("login");
         else toast(err.message, 'error');
     }
 }
@@ -245,7 +274,7 @@ async function onAgentRecipientsSend(agentType, btn) {
             console.warn('Sites that failed to build:\n' + fails.map(r => `${r.name}: ${r.error}`).join('\n'));
         }
     } catch (err) {
-        if (err.status === 401) { setView(false); return; }
+        if (err.status === 401) { setView("login"); return; }
         toast(err.message, 'error');
     } finally {
         btn.disabled = false;
@@ -275,7 +304,7 @@ async function onAgentRecipientsSave(e) {
         const sum = (b) => b.to.length + b.cc.length + b.bcc.length;
         toast(`Saved: TTP=${sum(payload.TTP)} addrs, RELAY=${sum(payload.RELAY)} addrs`, 'success');
     } catch (err) {
-        if (err.status === 401) { setView(false); return; }
+        if (err.status === 401) { setView("login"); return; }
         toast(err.message, 'error');
     } finally {
         els.agentRecipientsSave.disabled = false;
@@ -303,7 +332,7 @@ async function onCompSiteChange() {
         state.fieldsSource = res.source || null;
         renderComplianceFields();
     } catch (err) {
-        if (err.status === 401) { setView(false); return; }
+        if (err.status === 401) { setView("login"); return; }
         state.fields = [];
         state.fieldsSource = null;
         els.compFields.replaceChildren();
@@ -335,8 +364,9 @@ async function onLogin(e) {
             return;
         }
         els.who.textContent = els.loginUser.value.trim();
-        setView(true);
-        await refreshAll();
+        // Successful primary login still requires the unlock step.
+        setView('unlock');
+        setTimeout(() => els.unlockPass && els.unlockPass.focus(), 0);
     } catch (err) {
         els.loginError.textContent = err.message;
         els.loginError.hidden = false;
@@ -345,9 +375,35 @@ async function onLogin(e) {
 
 async function onLogout() {
     try { await api('/api/logout', { method: 'POST' }); } catch { /* ignore */ }
-    setView(false);
+    setView("login");
     els.loginUser.value = '';
     els.loginPass.value = '';
+}
+
+async function onUnlock(e) {
+    e.preventDefault();
+    els.unlockError.hidden = true;
+    els.unlockBtn.disabled = true;
+    try {
+        await api('/api/admin/unlock', {
+            method: 'POST',
+            body: JSON.stringify({ password: els.unlockPass.value })
+        });
+        els.unlockPass.value = '';
+        setView('admin');
+        await refreshAll();
+    } catch (err) {
+        els.unlockError.textContent = err.message;
+        els.unlockError.hidden = false;
+    } finally {
+        els.unlockBtn.disabled = false;
+    }
+}
+
+async function onRelock() {
+    try { await api('/api/admin/lock', { method: 'POST' }); } catch { /* ignore */ }
+    setView('unlock');
+    setTimeout(() => els.unlockPass && els.unlockPass.focus(), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -432,7 +488,7 @@ async function onSendReport(site, btn) {
         const r = await api(`/api/alerts/${encodeURIComponent(site.name)}/send`, { method: 'POST' });
         toast(`Sent to ${r.recipients.join(', ')} — ${r.totals.incompatible}/${r.totals.total} incompatible`, 'success');
     } catch (err) {
-        if (err.status === 401) { setView(false); return; }
+        if (err.status === 401) { setView("login"); return; }
         toast(`Send failed: ${err.message}`, 'error');
     } finally {
         btn.disabled = false;
@@ -551,7 +607,7 @@ async function onSiteSave(e) {
         closeSiteModal();
         await refreshAll();
     } catch (err) {
-        if (err.status === 401) { setView(false); return; }
+        if (err.status === 401) { setView("login"); return; }
         els.siteError.textContent = err.message;
         els.siteError.hidden = false;
     } finally {
@@ -578,7 +634,7 @@ async function onDeleteConfirm() {
         closeDeleteModal();
         await refreshAll();
     } catch (err) {
-        if (err.status === 401) { setView(false); return; }
+        if (err.status === 401) { setView("login"); return; }
         toast(err.message, 'error');
     } finally {
         els.deleteConfirm.disabled = false;
@@ -669,7 +725,7 @@ async function onCompSubmit(e) {
         toast(`Wrote ${res.written} field(s) to ${siteName}`, 'success');
         for (const input of els.compFields.querySelectorAll('input')) input.value = '';
     } catch (err) {
-        if (err.status === 401) { setView(false); return; }
+        if (err.status === 401) { setView("login"); return; }
         toast(err.message, 'error');
     } finally {
         els.compSubmit.disabled = false;

@@ -132,30 +132,45 @@ async function readRemoteFile(opts, remotePath) {
 
 // Pipe `content` (Buffer/string/stream) to `cat > <path>` on target.
 // Pass opts.useSudo=true to wrap with `sudo tee` for paths gor can't write directly.
+// When the gor user on the bridge needs a sudo password (no NOPASSWD), we
+// switch to `sudo -S` and prepend the password as the first line of stdin —
+// sudo consumes it, then tee receives the rest as the file contents.
 async function writeRemoteFile(opts, remotePath, content) {
     preflightEnv();
     preflightSite(opts);
     const timeoutMs = Number(opts.timeoutMs || process.env.SSH_TIMEOUT_MS || 60000);
     const isStream = content && typeof content.pipe === 'function';
-    debugOps('writeRemoteFile', { remotePath, isStream, useSudo: !!opts.useSudo, size: isStream ? '(stream)' : (content ? content.length : 0) });
+    const sudoPassword = opts.useSudo ? (opts.sudoPassword || opts.gorPassword || '') : '';
+    const useSudoS = opts.useSudo && sudoPassword;
+    debugOps('writeRemoteFile', { remotePath, isStream, useSudo: !!opts.useSudo, sudoMode: useSudoS ? '-S' : (opts.useSudo ? '-n' : 'none') });
     let writeCmd;
     if (opts.useSudo) {
+        const sudoFlag = useSudoS ? '-S' : '-n';
         const chownPart = opts.chownTo
-            ? ` && sudo -n chown ${shellQuote(opts.chownTo)} ${shellQuote(remotePath)}`
+            ? ` && sudo ${sudoFlag} chown ${shellQuote(opts.chownTo)} ${shellQuote(remotePath)}`
             : '';
-        writeCmd = `sudo -n tee ${shellQuote(remotePath)} > /dev/null${chownPart}`;
+        writeCmd = `sudo ${sudoFlag} tee ${shellQuote(remotePath)} > /dev/null${chownPart}`;
     } else {
         writeCmd = `cat > ${shellQuote(remotePath)}`;
     }
     const cmd = buildMiddleCmd({ ...opts, command: writeCmd });
     const conn = await connectJumper();
     try {
+        const { Readable, PassThrough } = require('stream');
         let inputStream;
         if (content && typeof content.pipe === 'function') {
             inputStream = content;
         } else {
-            const { Readable } = require('stream');
             inputStream = Readable.from(content || '');
+        }
+        // Prepend the sudo password line so `sudo -S` reads it from stdin
+        // before tee starts consuming the actual file content.
+        if (useSudoS) {
+            const pass = new PassThrough();
+            pass.write(sudoPassword + '\n');
+            inputStream.on('error', e => pass.destroy(e));
+            inputStream.pipe(pass);
+            inputStream = pass;
         }
         const result = await execOnce(conn, cmd, { inputStream, timeoutMs });
         if (result.code !== 0) {

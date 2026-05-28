@@ -147,6 +147,43 @@ function requireAdmin(req, res, next) {
     next();
 }
 
+// Second auth layer for admin write actions. Once unlocked via
+// POST /api/admin/unlock with the right password, the flag persists for the
+// session. Requires requireAdmin to have already gated the request.
+function requireAdminUnlocked(req, res, next) {
+    if (!req.session || req.session.adminUnlocked !== true) {
+        return res.status(403).json({ error: 'Admin actions locked. Enter the admin unlock passphrase first.', needsUnlock: true });
+    }
+    next();
+}
+
+app.get('/api/admin/unlock-status', requireAdmin, (req, res) => {
+    res.json({ unlocked: !!(req.session && req.session.adminUnlocked) });
+});
+
+app.post('/api/admin/unlock', requireAdmin, async (req, res) => {
+    const password = req.body && req.body.password;
+    const hash = process.env.ADMIN_UNLOCK_PASSWORD_HASH;
+    if (typeof password !== 'string' || !password) {
+        return res.status(400).json({ error: 'password is required' });
+    }
+    if (!hash) {
+        return res.status(500).json({ error: 'ADMIN_UNLOCK_PASSWORD_HASH not configured on server' });
+    }
+    const bcrypt = require('bcryptjs');
+    const ok = await bcrypt.compare(password, hash);
+    if (!ok) {
+        return res.status(403).json({ error: 'Wrong passphrase' });
+    }
+    req.session.adminUnlocked = true;
+    res.json({ ok: true, unlocked: true });
+});
+
+app.post('/api/admin/lock', requireAdmin, (req, res) => {
+    if (req.session) req.session.adminUnlocked = false;
+    res.json({ ok: true, unlocked: false });
+});
+
 async function authenticate(username, password) {
     // Admin first — admin role is a superset of viewer.
     if (username === ADMIN_USER && await bcrypt.compare(password, ADMIN_PASSWORD_HASH)) {
@@ -291,7 +328,7 @@ app.get('/api/agent-recipients', requireAuth, (req, res) => {
     res.json(agentRecipients);
 });
 
-app.put('/api/agent-recipients', requireAdmin, (req, res) => {
+app.put('/api/agent-recipients', requireAdmin, requireAdminUnlocked, (req, res) => {
     const body = req.body || {};
     if (typeof body !== 'object' || Array.isArray(body)) {
         return res.status(400).json({ error: 'Body must be {TTP:{to:[],cc:[],bcc:[]}, RELAY:{...}}' });
@@ -460,7 +497,7 @@ function validateSiteFields(body, { allowName = false } = {}) {
     return errors;
 }
 
-app.post('/api/sites', requireAdmin, (req, res) => {
+app.post('/api/sites', requireAdmin, requireAdminUnlocked, (req, res) => {
     const body = req.body || {};
     const errors = validateSiteFields(body, { allowName: true });
     if (!body.ip) errors.push('ip is required');
@@ -502,7 +539,7 @@ app.post('/api/sites', requireAdmin, (req, res) => {
     res.status(201).json({ ok: true, site: siteToPublic(body.name, sites[body.name]) });
 });
 
-app.put('/api/sites/:name', requireAdmin, (req, res) => {
+app.put('/api/sites/:name', requireAdmin, requireAdminUnlocked, (req, res) => {
     const { name } = req.params;
     if (!sites[name]) return res.status(404).json({ error: 'Unknown site' });
     const body = req.body || {};
@@ -543,7 +580,7 @@ app.put('/api/sites/:name', requireAdmin, (req, res) => {
     res.json({ ok: true, site: siteToPublic(name, s) });
 });
 
-app.delete('/api/sites/:name', requireAdmin, (req, res) => {
+app.delete('/api/sites/:name', requireAdmin, requireAdminUnlocked, (req, res) => {
     const { name } = req.params;
     if (!sites[name]) return res.status(404).json({ error: 'Unknown site' });
     const backup = sites[name];
@@ -563,7 +600,7 @@ function escapeFieldString(s) {
     return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-app.post('/api/compliance/:site', requireAdmin, async (req, res) => {
+app.post('/api/compliance/:site', requireAdmin, requireAdminUnlocked, async (req, res) => {
     const { site } = req.params;
     if (!sites[site]) return res.status(404).json({ error: 'Unknown site' });
     const body = req.body || {};
@@ -626,7 +663,7 @@ app.post('/api/compliance/:site', requireAdmin, async (req, res) => {
 
 const alerts = require('./lib/alerts');
 
-app.post('/api/alerts/:site/send', requireAdmin, async (req, res) => {
+app.post('/api/alerts/:site/send', requireAdmin, requireAdminUnlocked, async (req, res) => {
     const { site } = req.params;
     if (!sites[site]) return res.status(404).json({ error: 'Unknown site' });
     try {
@@ -644,7 +681,7 @@ app.post('/api/alerts/:site/send', requireAdmin, async (req, res) => {
 // BCC'd to the per-agent recipient list (plus any per-site recipients merged in
 // would be confusing for a combined mail — we deliberately use ONLY the agent
 // list here, not per-site recipients).
-app.post('/api/alerts/by-agent/:agentType/send', requireAdmin, async (req, res) => {
+app.post('/api/alerts/by-agent/:agentType/send', requireAdmin, requireAdminUnlocked, async (req, res) => {
     const { agentType } = req.params;
     if (!['TTP', 'RELAY'].includes(agentType)) {
         return res.status(400).json({ error: 'agentType must be TTP or RELAY' });

@@ -195,6 +195,8 @@ a.btn-subtle:hover { filter: brightness(1.1); }
 .vda-alert-list .alert-bot { font-weight: 600; }
 .vda-alert-list .alert-ip { color: var(--muted); font-size: 0.8rem; }
 .vda-alert-list .alert-meta { color: var(--muted); font-size: 0.8rem; margin-left: auto; }
+.vda-alert-list .alert-meta.alert-meta-dead { color: var(--bad); font-weight: 600; }
+.vda-alert-list .alert-empty { padding: 0.5rem 0.75rem; font-size: 0.85rem; }
 .vda-alert-list .alert-diffs { padding-left: 1rem; display: flex; flex-direction: column; gap: 0.15rem; }
 .vda-alert-list .alert-diff {
     display: flex;
@@ -305,6 +307,10 @@ tbody tr.mismatch:hover td { background: rgba(255, 82, 82, 0.12); }
 tbody tr.match:hover td { background: rgba(0, 200, 83, 0.1); }
 /* Per-cell diff: this specific field differs from compliance_details. */
 tbody td.diff { color: var(--bad); font-weight: 600; }
+/* vda_version cell — explicit green when it matches the compliance row,
+   explicit red when it differs. Independent of the whole-row .match colour. */
+tbody td.cell-match    { background: rgba(0, 200,  83, 0.22); color: var(--ok);  font-weight: 600; }
+tbody td.cell-mismatch { background: rgba(244, 67,  54, 0.22); color: var(--bad); font-weight: 600; }
 
 /* Synthetic "compatibility" column: per-bot verdict pill. */
 th.col-compatibility, td.col-compatibility { text-align: center; }

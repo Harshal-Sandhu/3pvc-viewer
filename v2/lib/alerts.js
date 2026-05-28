@@ -26,9 +26,8 @@ function versionFieldFor(site) {
 }
 
 const INFLUX_TIMEOUT_MS = 20000;
-// Reports include the last 24h of bot snapshots. Within that window we still
-// skip `dead_bot` rows when picking each bot's representative row — see the
-// dedup logic in buildReport().
+// Reports cover the last 24h of bot snapshots. Within that window we fetch
+// every row, then pick the most recent row per bot whose version is NOT dead.
 const MAIN_LOOKBACK = '24h';
 const ROW_LIMIT = 20000;
 
@@ -107,48 +106,56 @@ async function buildReport(siteName, site) {
         queryInflux(site, compQ).catch(() => ({ columns: [], rows: [] }))
     ]);
 
-    // Keep the latest *known* row per bot. Rows with api_version='dead_bot' (or
-    // null) mean the bot was offline at that timestamp — those are useless for
-    // a compliance comparison, so we walk past them and take the most recent
-    // row that actually reports a real api_version. If a bot has only dead_bot
-    // rows in the window, we still keep one so the report shows it as Unknown.
+    // Fetch all rows in the window; for each distinct bot_id keep only the
+    // latest non-dead row (rows are sorted time DESC, so the first usable row
+    // we see per bot IS that bot's latest non-dead snapshot). Bots whose
+    // entire history in the window is dead drop out of the report entirely.
     const botIdx = bots.columns.indexOf('bot_id');
     const apiIdxMain = bots.columns.indexOf(versionField);
-    const isUsableApi = (v) => v != null && String(v).trim() !== '' && String(v).trim().toLowerCase() !== 'dead_bot';
-    let uniqueRows = bots.rows;
-    if (botIdx !== -1) {
-        const bestKnown = new Map();   // bot_id -> row with usable api_version (first seen, which is latest)
-        const fallback = new Map();    // bot_id -> any latest row, used if no known row exists
+    const isAlive = (v) => v != null && String(v).trim() !== '' && String(v).trim().toLowerCase() !== 'dead_bot';
+
+    // TTP sites can host both QT and HAI bots in the same measurement; reports
+    // for TTP focus on HAI only (HAI bots carry "hai" in the version field).
+    const isInScope = (v) => {
+        if (site && site.agentType === 'TTP') return v != null && /hai/i.test(String(v));
+        return true;
+    };
+
+    let uniqueRows = [];
+    if (botIdx !== -1 && apiIdxMain !== -1) {
+        const latestAlive = new Map();   // bot_id -> latest non-dead row
         for (const r of bots.rows) {
             const id = r[botIdx];
             if (id == null) continue;
-            if (!fallback.has(id)) fallback.set(id, r);
-            if (!bestKnown.has(id) && apiIdxMain !== -1 && isUsableApi(r[apiIdxMain])) {
-                bestKnown.set(id, r);
-            }
+            if (latestAlive.has(id)) continue;
+            const v = r[apiIdxMain];
+            if (!isAlive(v) || !isInScope(v)) continue;
+            latestAlive.set(id, r);
         }
-        uniqueRows = [];
-        for (const [id, r] of fallback) {
-            uniqueRows.push(bestKnown.get(id) || r);
-        }
+        uniqueRows = [...latestAlive.values()];
     }
 
     const complianceIndex = indexCompliance(compliance, versionField);
 
     let compatible = 0;
     let incompatible = 0;
-    let unknown = 0;
     const mismatches = []; // [{ bot_id, ip, api_version, diffs: [{field, actual, expected}], expected: [[field, value]] }]
 
     const versionIdxMain = bots.columns.indexOf(versionField);
+    const ipIdxMain      = bots.columns.indexOf('ip');
     for (const row of uniqueRows) {
         const { ref, diffs } = diffRow(bots.columns, row, compliance, complianceIndex, versionField);
-        if (!ref) { unknown++; continue; }
+        const botId = botIdx !== -1 ? row[botIdx] : '';
+        const ip    = ipIdxMain !== -1 ? row[ipIdxMain] : '';
+        // Bots without a matching compliance row would be "Dead" in the viewer.
+        // Per requirement, reports skip them entirely — they are not counted,
+        // not listed as mismatches, and never appear in the email/xlsx.
+        if (!ref) continue;
         if (diffs.length === 0) { compatible++; continue; }
         incompatible++;
         mismatches.push({
-            bot_id: botIdx !== -1 ? row[botIdx] : '',
-            ip: bots.columns.indexOf('ip') !== -1 ? row[bots.columns.indexOf('ip')] : '',
+            bot_id: botId,
+            ip: ip,
             // We keep the field key `api_version` in the report payload regardless of site
             // so the email/xlsx template stays uniform. The *value* comes from whichever
             // column this site uses (`version` for TTP, `api_version` otherwise).
@@ -158,6 +165,7 @@ async function buildReport(siteName, site) {
         });
     }
 
+    const total = compatible + incompatible;
     const xlsxBuffer = await renderXlsx({
         siteName,
         complianceColumns: compliance.columns,
@@ -166,12 +174,12 @@ async function buildReport(siteName, site) {
         complianceIndex,
         complianceTable: compliance,
         versionField,
-        totals: { total: uniqueRows.length, compatible, incompatible, unknown }
+        totals: { total, compatible, incompatible }
     });
 
     return {
         siteName,
-        totals: { total: uniqueRows.length, compatible, incompatible, unknown },
+        totals: { total, compatible, incompatible },
         mismatches,
         xlsxBuffer
     };
@@ -192,10 +200,9 @@ async function renderXlsx({ siteName, botColumns, rows, complianceTable, complia
     summary.addRows([
         { metric: 'Site', value: siteName },
         { metric: 'Report generated', value: new Date().toISOString() },
-        { metric: 'Bots evaluated', value: totals.total },
+        { metric: 'Bots evaluated (alive only)', value: totals.total },
         { metric: 'Compatible', value: totals.compatible },
-        { metric: 'Incompatible', value: totals.incompatible },
-        { metric: 'Dead (no api_version at script time)', value: totals.unknown }
+        { metric: 'Incompatible', value: totals.incompatible }
     ]);
 
     const detail = wb.addWorksheet('Per-bot comparison');
@@ -229,12 +236,15 @@ async function renderXlsx({ siteName, botColumns, rows, complianceTable, complia
 
     const badFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
     const okFill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6F4EA' } };
-    const unkFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F1F1' } };
     const diffCellFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCA5A5' } };
 
     for (const row of rows) {
         const { ref, diffs } = diffRow(botColumns, row, complianceTable, complianceIndex, versionField);
-        const status = !ref ? 'Dead' : (diffs.length === 0 ? 'Compatible' : 'Incompatible');
+        // Reports skip dead bots — uniqueRows is already alive-only, but a bot
+        // whose alive api_version doesn't match any compliance row would
+        // otherwise render here as Dead. Drop those too.
+        if (!ref) continue;
+        const status = diffs.length === 0 ? 'Compatible' : 'Incompatible';
         const diffByField = new Map(diffs.map(d => [d.field, d]));
 
         const xlRow = [
@@ -255,7 +265,7 @@ async function renderXlsx({ siteName, botColumns, rows, complianceTable, complia
         const added = detail.addRow(xlRow);
 
         // Whole-row fill based on status.
-        const fill = !ref ? unkFill : (diffs.length === 0 ? okFill : badFill);
+        const fill = diffs.length === 0 ? okFill : badFill;
         added.eachCell({ includeEmpty: true }, (cell) => {
             cell.fill = fill;
             cell.border = { bottom: { style: 'hair', color: { argb: 'FFDDDDDD' } } };
@@ -288,7 +298,6 @@ async function renderXlsx({ siteName, botColumns, rows, complianceTable, complia
     return Buffer.from(buf);
 }
 
-// Renders the email summary HTML (and a plaintext fallback) from the report.
 function renderEmail(report) {
     const { siteName, totals, mismatches } = report;
     const subject = totals.incompatible > 0
@@ -316,10 +325,9 @@ function renderEmail(report) {
         <h2 style="margin:0 0 8px">3PVC compliance report — ${escapeHtml(siteName)}</h2>
         <p style="color:#666;margin:0 0 16px">Generated ${new Date().toISOString()}</p>
         <table style="border-collapse:collapse;margin-bottom:18px">
-            <tr><td style="padding:4px 14px 4px 0;color:#666">Bots evaluated</td><td style="padding:4px 0"><b>${totals.total}</b></td></tr>
+            <tr><td style="padding:4px 14px 4px 0;color:#666">Bots evaluated (alive only)</td><td style="padding:4px 0"><b>${totals.total}</b></td></tr>
             <tr><td style="padding:4px 14px 4px 0;color:#0a7f30">Compatible</td><td style="padding:4px 0"><b>${totals.compatible}</b></td></tr>
             <tr><td style="padding:4px 14px 4px 0;color:#b91c1c">Incompatible</td><td style="padding:4px 0"><b>${totals.incompatible}</b></td></tr>
-            <tr><td style="padding:4px 14px 4px 0;color:#666">Dead at script time</td><td style="padding:4px 0"><b>${totals.unknown}</b></td></tr>
         </table>
         ${mismatches.length === 0 ? '<p style="color:#0a7f30">No mismatches.</p>' : `
         <h3 style="margin:18px 0 8px">Mismatched bots${remaining ? ` (showing first ${top.length})` : ''}</h3>
@@ -342,10 +350,9 @@ function renderEmail(report) {
         `3PVC compliance report — ${siteName}`,
         `Generated ${new Date().toISOString()}`,
         '',
-        `Bots evaluated:  ${totals.total}`,
+        `Bots evaluated (alive only): ${totals.total}`,
         `Compatible:      ${totals.compatible}`,
         `Incompatible:    ${totals.incompatible}`,
-        `Dead (at script time): ${totals.unknown}`,
         '',
         mismatches.length === 0 ? 'No mismatches.' : `Mismatched bots: ${mismatches.length}`,
         ...top.map(m => `  - ${m.bot_id} (${m.ip}) api=${m.api_version}: ${m.diffs.length} diff(s)`)
@@ -497,9 +504,8 @@ async function sendCombinedReport(agentType, entries, opts = {}) {
         a.total += r.totals.total;
         a.compatible += r.totals.compatible;
         a.incompatible += r.totals.incompatible;
-        a.unknown += r.totals.unknown;
         return a;
-    }, { total: 0, compatible: 0, incompatible: 0, unknown: 0, failed: 0 });
+    }, { total: 0, compatible: 0, incompatible: 0, failed: 0 });
 
     const stamp = new Date().toISOString();
     const subject = `3PVC Report for ${agentType}`;
@@ -508,7 +514,7 @@ async function sendCombinedReport(agentType, entries, opts = {}) {
         if (!r.ok) {
             return `<tr>
                 <td style="padding:6px 10px;border-bottom:1px solid #eee"><b>${escapeHtml(r.name)}</b></td>
-                <td colspan="5" style="padding:6px 10px;border-bottom:1px solid #eee;color:#b91c1c">FAILED: ${escapeHtml(r.error)}</td>
+                <td colspan="4" style="padding:6px 10px;border-bottom:1px solid #eee;color:#b91c1c">FAILED: ${escapeHtml(r.error)}</td>
             </tr>`;
         }
         return `<tr>
@@ -516,7 +522,6 @@ async function sendCombinedReport(agentType, entries, opts = {}) {
             <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">${r.totals.total}</td>
             <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;color:#0a7f30">${r.totals.compatible}</td>
             <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;color:#b91c1c"><b>${r.totals.incompatible}</b></td>
-            <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">${r.totals.unknown}</td>
             <td style="padding:6px 10px;border-bottom:1px solid #eee">${escapeHtml(reportFilename(r.name))}</td>
         </tr>`;
     }).join('');
@@ -525,10 +530,9 @@ async function sendCombinedReport(agentType, entries, opts = {}) {
         <h2 style="margin:0 0 8px">3PVC compliance report — ${escapeHtml(agentType)} (${entries.length} site${entries.length === 1 ? '' : 's'})</h2>
         <p style="color:#666;margin:0 0 16px">Generated ${escapeHtml(stamp)}</p>
         <table style="border-collapse:collapse;margin-bottom:18px">
-            <tr><td style="padding:4px 14px 4px 0;color:#666">Bots evaluated</td><td style="padding:4px 0"><b>${agg.total}</b></td></tr>
+            <tr><td style="padding:4px 14px 4px 0;color:#666">Bots evaluated (alive only)</td><td style="padding:4px 0"><b>${agg.total}</b></td></tr>
             <tr><td style="padding:4px 14px 4px 0;color:#0a7f30">Compatible</td><td style="padding:4px 0"><b>${agg.compatible}</b></td></tr>
             <tr><td style="padding:4px 14px 4px 0;color:#b91c1c">Incompatible</td><td style="padding:4px 0"><b>${agg.incompatible}</b></td></tr>
-            <tr><td style="padding:4px 14px 4px 0;color:#666">Dead at script time</td><td style="padding:4px 0"><b>${agg.unknown}</b></td></tr>
             ${agg.failed ? `<tr><td style="padding:4px 14px 4px 0;color:#b91c1c">Sites that failed to report</td><td style="padding:4px 0"><b>${agg.failed}</b></td></tr>` : ''}
         </table>
         <h3 style="margin:18px 0 8px">Per-site breakdown</h3>
@@ -538,22 +542,20 @@ async function sendCombinedReport(agentType, entries, opts = {}) {
                 <th style="padding:6px 10px;text-align:right;border-bottom:1px solid #ddd">Bots</th>
                 <th style="padding:6px 10px;text-align:right;border-bottom:1px solid #ddd">Compatible</th>
                 <th style="padding:6px 10px;text-align:right;border-bottom:1px solid #ddd">Incompatible</th>
-                <th style="padding:6px 10px;text-align:right;border-bottom:1px solid #ddd">Dead</th>
                 <th style="padding:6px 10px;text-align:left;border-bottom:1px solid #ddd">Attached file</th>
             </tr></thead>
             <tbody>${siteRowsHtml}</tbody>
         </table>
-        <p style="color:#666;margin-top:18px;font-size:12px">One xlsx per site is attached — see per-bot comparison with full firmware detail and expected values.</p>
+        <p style="color:#666;margin-top:18px;font-size:12px">One xlsx per site is attached — full per-bot compliance comparison.</p>
     </body></html>`;
 
     const text = [
         `3PVC compliance report — ${agentType} (${entries.length} sites)`,
         `Generated ${stamp}`,
         '',
-        `Bots evaluated:  ${agg.total}`,
+        `Bots evaluated (alive only): ${agg.total}`,
         `Compatible:      ${agg.compatible}`,
         `Incompatible:    ${agg.incompatible}`,
-        `Dead (at script time): ${agg.unknown}`,
         agg.failed ? `Failed sites:    ${agg.failed}` : null,
         '',
         'Per-site breakdown:',

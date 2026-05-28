@@ -69,7 +69,8 @@
       "time": "08:00",
       "dayOfWeek": 1
     },
-    "agentType": "RELAY"
+    "agentType": "RELAY",
+    "botSudoPassword": "apj0702"
   },
   "essilor_luxottica_fhr": {
     "ip": "172.28.76.138",

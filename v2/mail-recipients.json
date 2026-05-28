@@ -1,0 +1,28 @@
+{
+  "_comment": "Recipient list for bin/send-prepared-mail.js. Used by both TTP and RELAY sends unless overridden per-agent below.",
+  "to": [
+    "go_change_management@greyorange.com",
+    "gtp-hardwaresupport@greyorange.com",
+    "nitesh.d@greyorange.com"
+  ],
+  "cc": [
+    "varun.v@greyorange.com",
+    "rahul.g@greyorange.com",
+    "product-validation@greyorange.com",
+    "harshal.s@greyorange.com",
+    "ridam.r@greyorange.com",
+    "butler.labusers@greyorange.com",
+    "jyoti.a@greyorange.com",
+    "herpreet.s@greyorange.com",
+    "siddhant.s@greyorange.com",
+    "anirban.b@greyorange.com",
+    "akshay.v@greyorange.com",
+    "neelesh.m@greyorange.com",
+    "satish.p@greyorange.com",
+    "aakash.a@greyorange.com",
+    "ravish.s@greyorange.com",
+    "charul.b@greyorange.com",
+    "sukul.b@greyorange.com"
+  ],
+  "bcc": []
+}

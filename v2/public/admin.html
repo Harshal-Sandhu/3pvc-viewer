@@ -22,6 +22,18 @@
         </form>
     </div>
 
+    <div id="unlock-view" class="view" hidden>
+        <form id="unlock-form" class="card login-card" autocomplete="off">
+            <h1>Admin unlock</h1>
+            <p class="muted">You're signed in as admin. Enter the admin passphrase to enable write actions on this page.</p>
+            <label>Passphrase
+                <input type="password" id="unlock-pass" autocomplete="current-password" required>
+            </label>
+            <button type="submit" id="unlock-btn">Unlock</button>
+            <p id="unlock-error" class="error" hidden></p>
+        </form>
+    </div>
+
     <div id="admin-view" class="view" hidden>
         <header class="topbar">
             <h1>3PVC Admin</h1>
@@ -29,6 +41,7 @@
                 <a href="/" class="btn-subtle" role="button">Open viewer</a>
                 <a href="/operation" class="btn-subtle" role="button">Operation</a>
                 <span id="who" class="muted small"></span>
+                <button id="relock-btn" type="button" class="btn-subtle" title="Lock admin actions for this session">Lock</button>
                 <button id="logout-btn" type="button" class="btn-subtle">Sign out</button>
             </div>
         </header>
