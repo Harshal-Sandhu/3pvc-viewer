@@ -146,10 +146,14 @@ async function writeRemoteFile(opts, remotePath, content) {
     let writeCmd;
     if (opts.useSudo) {
         const sudoFlag = useSudoS ? '-S' : '-n';
-        const chownPart = opts.chownTo
-            ? ` && sudo ${sudoFlag} chown ${shellQuote(opts.chownTo)} ${shellQuote(remotePath)}`
+        // Wrap tee (+ optional chown) inside a single sudo so the password
+        // is only consumed from stdin once. Two separate `sudo -S` calls
+        // would prompt twice and the second has no password on stdin.
+        const innerChown = opts.chownTo
+            ? ` && chown ${shellQuote(opts.chownTo)} ${shellQuote(remotePath)}`
             : '';
-        writeCmd = `sudo ${sudoFlag} tee ${shellQuote(remotePath)} > /dev/null${chownPart}`;
+        const inner = `tee ${shellQuote(remotePath)} > /dev/null${innerChown}`;
+        writeCmd = `sudo ${sudoFlag} sh -c ${shellQuote(inner)}`;
     } else {
         writeCmd = `cat > ${shellQuote(remotePath)}`;
     }
