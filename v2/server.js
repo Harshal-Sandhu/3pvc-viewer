@@ -5,7 +5,7 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config();
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { runOnSiteServer, runOnBot, readRemoteFile, writeRemoteFile } = require('./lib/sshChain');
 const { parseInventory, parseInventoryPorts, applyActiveIps, applyMultiSectionActiveIps, updateGroupVars, parseGroupVars } = require('./lib/vdaInventory');
 const multer = require('multer');
