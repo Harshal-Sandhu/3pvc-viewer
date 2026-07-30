@@ -12,10 +12,14 @@ const $ = (sel) => document.querySelector(sel);
 const els = {
     loginView: $('#login-view'),
     appView: $('#app-view'),
-    loginForm: $('#login-form'),
-    loginUser: $('#login-user'),
-    loginPass: $('#login-pass'),
-    loginError: $('#login-error'),
+
+    otpForm: $('#otp-form'),
+    otpEmail: $('#otp-email'),
+    otpSendBtn: $('#otp-send-btn'),
+    otpCodeRow: $('#otp-code-row'),
+    otpCode: $('#otp-code'),
+    otpStatus: $('#otp-status'),
+    otpError: $('#otp-error'),
 
     who: $('#who'),
     logout: $('#logout-btn'),
@@ -325,8 +329,9 @@ function isValidLookback(s) {
 }
 
 function wireEvents() {
-    els.loginForm.addEventListener('submit', onLogin);
     els.logout.addEventListener('click', onLogout);
+    els.otpSendBtn.addEventListener('click', onOtpSend);
+    els.otpForm.addEventListener('submit', onOtpVerify);
 
     els.load.addEventListener('click', () => loadData());
     els.exportBtn.addEventListener('click', onExport);
@@ -437,31 +442,50 @@ function wireEvents() {
 // Auth
 // ---------------------------------------------------------------------------
 
-async function onLogin(e) {
-    e.preventDefault();
-    els.loginError.hidden = true;
-    const username = els.loginUser.value.trim();
-    const password = els.loginPass.value;
+async function onLogout() {
+    try { await api('/api/logout', { method: 'POST' }); } catch { /* ignore */ }
+    stopAutoRefresh();
+    setView(false);
+}
+
+async function onOtpSend() {
+    els.otpError.hidden = true;
+    els.otpStatus.hidden = true;
+    const email = els.otpEmail.value.trim();
+    if (!email) return;
+    els.otpSendBtn.disabled = true;
     try {
-        const r = await api('/api/login', { method: 'POST', body: JSON.stringify({ username, password }) });
-        els.loginPass.value = '';
-        els.who.textContent = username;
+        await api('/api/otp/request', { method: 'POST', body: JSON.stringify({ email }) });
+        els.otpCodeRow.hidden = false;
+        els.otpStatus.textContent = 'Code sent — check your email.';
+        els.otpStatus.hidden = false;
+        els.otpCode.focus();
+    } catch (err) {
+        els.otpError.textContent = err.message;
+        els.otpError.hidden = false;
+    } finally {
+        els.otpSendBtn.disabled = false;
+    }
+}
+
+async function onOtpVerify(e) {
+    e.preventDefault();
+    els.otpError.hidden = true;
+    const email = els.otpEmail.value.trim();
+    const code = els.otpCode.value.trim();
+    if (!code) return;
+    try {
+        const r = await api('/api/otp/verify', { method: 'POST', body: JSON.stringify({ email, code }) });
+        els.otpCode.value = '';
+        els.who.textContent = email;
         els.adminLink.hidden = r.role !== 'admin';
         setView(true);
         await loadSites();
         if (state.selectedSite) await loadData({ silent: true });
     } catch (err) {
-        els.loginError.textContent = err.message;
-        els.loginError.hidden = false;
+        els.otpError.textContent = err.message;
+        els.otpError.hidden = false;
     }
-}
-
-async function onLogout() {
-    try { await api('/api/logout', { method: 'POST' }); } catch { /* ignore */ }
-    stopAutoRefresh();
-    setView(false);
-    els.loginUser.value = '';
-    els.loginPass.value = '';
 }
 
 // ---------------------------------------------------------------------------

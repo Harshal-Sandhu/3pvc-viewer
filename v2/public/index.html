@@ -8,17 +8,21 @@
 </head>
 <body>
     <div id="login-view" class="view">
-        <form id="login-form" class="card login-card" autocomplete="off">
+        <form id="otp-form" class="card login-card" autocomplete="off">
             <h1>3PVC Viewer</h1>
-            <p class="muted">Sign in to continue</p>
-            <label>Username
-                <input type="text" id="login-user" autocomplete="username" required>
+            <p class="muted">Sign in with your greyorange.com email</p>
+            <label>Email
+                <input type="email" id="otp-email" autocomplete="username" placeholder="you@greyorange.com" required>
             </label>
-            <label>Password
-                <input type="password" id="login-pass" autocomplete="current-password" required>
-            </label>
-            <button type="submit" id="login-btn">Sign in</button>
-            <p id="login-error" class="error" hidden></p>
+            <button type="button" id="otp-send-btn">Send code</button>
+            <div id="otp-code-row" hidden>
+                <label>Code
+                    <input type="text" id="otp-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456">
+                </label>
+                <button type="submit" id="otp-verify-btn">Verify</button>
+            </div>
+            <p id="otp-status" class="muted small" hidden></p>
+            <p id="otp-error" class="error" hidden></p>
         </form>
     </div>
 

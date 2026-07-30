@@ -8,6 +8,7 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { runOnSiteServer, runOnBot, readRemoteFile, writeRemoteFile } = require('./lib/sshChain');
 const { parseInventory, parseInventoryPorts, applyActiveIps, applyMultiSectionActiveIps, updateGroupVars, parseGroupVars } = require('./lib/vdaInventory');
+const otp = require('./lib/otp');
 const multer = require('multer');
 const os = require('os');
 const crypto = require('crypto');
@@ -130,6 +131,27 @@ function loginThrottle(req, res, next) {
     next();
 }
 
+// Persistent, append-only record of every successful login — used to measure
+// tool usage/ROI (distinct users, frequency, method). Same pattern as
+// OPS_AUDIT_PATH/appendOpsAudit further down.
+const LOGIN_AUDIT_PATH = path.join(__dirname, 'login-audit.log');
+function appendLoginAudit(user, role, method, req) {
+    const line = [new Date().toISOString(), user, role, method, req.ip].join('\t') + '\n';
+    fs.appendFile(LOGIN_AUDIT_PATH, line, err => {
+        if (err) console.error('Login audit log write failed:', err.message);
+    });
+}
+
+// Shared IP-keyed failure budget for both password and OTP login attempts —
+// deliberately the same map/thresholds as password login, so one IP can't
+// double its guess budget by mixing the two mechanisms.
+function recordFailedAttempt(ip) {
+    const entry = failedLogins.get(ip) || { count: 0, until: 0 };
+    entry.count += 1;
+    if (entry.count >= LOCK_AFTER) entry.until = Date.now() + LOCK_FOR_MS;
+    failedLogins.set(ip, entry);
+}
+
 function requireAuth(req, res, next) {
     if (!req.session || !req.session.user) {
         return res.status(401).json({ error: 'Not authenticated' });
@@ -209,16 +231,58 @@ app.post('/api/login', loginThrottle, async (req, res) => {
             if (err) return res.status(500).json({ error: 'Session error' });
             req.session.user = username;
             req.session.role = role;
+            // Deliberately not audit-logged: this is the admin-page password
+            // login, out of scope for the OTP usage/ROI report.
             res.json({ ok: true, role });
         });
         return;
     }
 
-    const entry = failedLogins.get(req.ip) || { count: 0, until: 0 };
-    entry.count += 1;
-    if (entry.count >= LOCK_AFTER) entry.until = Date.now() + LOCK_FOR_MS;
-    failedLogins.set(req.ip, entry);
+    recordFailedAttempt(req.ip);
     res.status(401).json({ error: 'Invalid credentials' });
+});
+
+app.post('/api/otp/request', loginThrottle, async (req, res) => {
+    const { email } = req.body || {};
+    if (typeof email !== 'string' || !email.trim()) {
+        return res.status(400).json({ error: 'email is required' });
+    }
+    const result = otp.beginRequest(email);
+    if (!result.ok) {
+        return res.status(400).json({ error: result.error });
+    }
+    try {
+        await alerts.sendMail({
+            to: result.email,
+            subject: 'Your 3PVC login code',
+            text: `Your 3PVC login code is ${result.code}. It expires in 5 minutes.`,
+            html: `<p>Your 3PVC login code is <b style="font-size:1.2em;letter-spacing:0.1em">${result.code}</b>.</p><p>It expires in 5 minutes.</p>`
+        });
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('Failed to send OTP email:', err);
+        res.status(502).json({ error: 'Failed to send the code email. Try again shortly.' });
+    }
+});
+
+app.post('/api/otp/verify', loginThrottle, (req, res) => {
+    const { email, code } = req.body || {};
+    if (typeof email !== 'string' || typeof code !== 'string') {
+        return res.status(400).json({ error: 'Invalid request' });
+    }
+    const result = otp.verify(email, code);
+    if (!result.ok) {
+        recordFailedAttempt(req.ip);
+        return res.status(401).json({ error: result.error });
+    }
+    failedLogins.delete(req.ip);
+    req.session.regenerate(err => {
+        if (err) return res.status(500).json({ error: 'Session error' });
+        req.session.user = result.email;
+        req.session.role = 'viewer';
+        appendLoginAudit(result.email, 'viewer', 'otp', req);
+        res.json({ ok: true, role: 'viewer' });
+    });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -318,6 +382,41 @@ function validateAlertSchedule(input) {
     }
     return { ok: true, value: normalizeSchedule(input) };
 }
+
+// Usage/ROI report, built from login-audit.log (see appendLoginAudit above).
+// Admin-only — the raw log has real user emails/IPs in it.
+app.get('/api/admin/usage', requireAdmin, (req, res) => {
+    fs.readFile(LOGIN_AUDIT_PATH, 'utf8', (err, text) => {
+        if (err && err.code !== 'ENOENT') {
+            console.error('Failed to read login-audit.log:', err.message);
+            return res.status(500).json({ error: 'Failed to read usage log' });
+        }
+        const lines = (text || '').split('\n').filter(Boolean);
+        const entries = lines.map(line => {
+            const [time, user, role, method, ip] = line.split('\t');
+            return { time, user, role, method, ip };
+        }).filter(e => e.time);
+
+        const uniqueUsers = new Set(entries.map(e => e.user)).size;
+        const byMethod = { password: 0, otp: 0 };
+        for (const e of entries) {
+            if (byMethod[e.method] !== undefined) byMethod[e.method] += 1;
+        }
+        const byDayMap = new Map();
+        for (const e of entries) {
+            const day = (e.time || '').slice(0, 10); // YYYY-MM-DD
+            if (!day) continue;
+            byDayMap.set(day, (byDayMap.get(day) || 0) + 1);
+        }
+        const byDay = Array.from(byDayMap.entries())
+            .map(([date, count]) => ({ date, count }))
+            .sort((a, b) => a.date.localeCompare(b.date));
+
+        const recent = entries.slice(-200).reverse();
+
+        res.json({ total: entries.length, uniqueUsers, byMethod, byDay, recent });
+    });
+});
 
 app.get('/api/sites', requireAuth, (req, res) => {
     res.json(Object.entries(sites).map(([name, s]) => siteToPublic(name, s)));

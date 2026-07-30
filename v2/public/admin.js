@@ -10,6 +10,7 @@ const els = {
     loginUser: $('#login-user'),
     loginPass: $('#login-pass'),
     loginError: $('#login-error'),
+
     who: $('#who'),
     logout: $('#logout-btn'),
     relock: $('#relock-btn'),
@@ -22,6 +23,14 @@ const els = {
 
     sitesBody: $('#sites-body'),
     addSiteBtn: $('#add-site-btn'),
+
+    usageRefreshBtn: $('#usage-refresh-btn'),
+    usageTotal: $('#usage-total'),
+    usageUnique: $('#usage-unique'),
+    usagePassword: $('#usage-password'),
+    usageOtp: $('#usage-otp'),
+    usageBody: $('#usage-body'),
+    usageEmpty: $('#usage-empty'),
 
     siteModal: $('#site-modal'),
     siteModalTitle: $('#site-modal-title'),
@@ -162,6 +171,7 @@ function wireEvents() {
     els.logout.addEventListener('click', onLogout);
     els.unlockForm.addEventListener('submit', onUnlock);
     els.relock.addEventListener('click', onRelock);
+    els.usageRefreshBtn.addEventListener('click', () => loadUsage());
 
     els.addSiteBtn.addEventListener('click', () => openSiteModal(null));
     els.siteModalClose.addEventListener('click', closeSiteModal);
@@ -212,9 +222,34 @@ async function refreshAll() {
         renderComplianceFields();
         renderAgentRecipients();
         updateCompTarget();
+        await loadUsage();
     } catch (err) {
         if (err.status === 401) setView("login");
         else toast(err.message, 'error');
+    }
+}
+
+async function loadUsage() {
+    try {
+        const usage = await api('/api/admin/usage');
+        els.usageTotal.textContent = usage.total;
+        els.usageUnique.textContent = usage.uniqueUsers;
+        els.usagePassword.textContent = usage.byMethod.password || 0;
+        els.usageOtp.textContent = usage.byMethod.otp || 0;
+
+        els.usageBody.replaceChildren();
+        els.usageEmpty.hidden = usage.recent.length > 0;
+        for (const e of usage.recent) {
+            const tr = document.createElement('tr');
+            for (const val of [e.time, e.user, e.role, e.method, e.ip]) {
+                const td = document.createElement('td');
+                td.textContent = val || '';
+                tr.append(td);
+            }
+            els.usageBody.append(tr);
+        }
+    } catch (err) {
+        if (err.status !== 401) toast(err.message, 'error');
     }
 }
 

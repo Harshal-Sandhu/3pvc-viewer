@@ -92,13 +92,15 @@ function diffRow(botColumns, botRow, complianceTable, complianceIndex, versionFi
 }
 
 // Builds the full report (summary + xlsx buffer) for one site.
+// opts.lookback overrides the default 24h window (e.g. '7d' for a weekly report).
 // Returns { ok, siteName, totals, mismatches, xlsxBuffer, columns }.
-async function buildReport(siteName, site) {
+async function buildReport(siteName, site, opts = {}) {
     const measurement = site.measurement;
     const complianceMeasurement = site.complianceMeasurement || 'compliance_details';
     const versionField = versionFieldFor(site);
+    const lookback = opts.lookback || MAIN_LOOKBACK;
 
-    const mainQ = `SELECT * FROM "${measurement}" WHERE time > now() - ${MAIN_LOOKBACK} ORDER BY time DESC LIMIT ${ROW_LIMIT}`;
+    const mainQ = `SELECT * FROM "${measurement}" WHERE time > now() - ${lookback} ORDER BY time DESC LIMIT ${ROW_LIMIT}`;
     const compQ = `SELECT * FROM "${complianceMeasurement}" ORDER BY time DESC LIMIT 500`;
 
     const [bots, compliance] = await Promise.all([
@@ -106,24 +108,21 @@ async function buildReport(siteName, site) {
         queryInflux(site, compQ).catch(() => ({ columns: [], rows: [] }))
     ]);
 
-    // Fetch all rows in the window; for each distinct bot_id keep only the
+    // Fetch all rows in the window; for each distinct bot keep only the
     // latest non-dead row (rows are sorted time DESC, so the first usable row
     // we see per bot IS that bot's latest non-dead snapshot). Bots whose
     // entire history in the window is dead drop out of the report entirely.
-    const botIdx = bots.columns.indexOf('bot_id');
+    // TTP sites don't have a bot_id column — fall back to ip as the unique key.
+    const botIdCol = bots.columns.includes('bot_id') ? 'bot_id' : 'ip';
+    const botIdx = bots.columns.indexOf(botIdCol);
     const apiIdxMain = bots.columns.indexOf(versionField);
     const isAlive = (v) => v != null && String(v).trim() !== '' && String(v).trim().toLowerCase() !== 'dead_bot';
 
-    // TTP sites can host both QT and HAI bots in the same measurement; reports
-    // for TTP focus on HAI only (HAI bots carry "hai" in the version field).
-    const isInScope = (v) => {
-        if (site && site.agentType === 'TTP') return v != null && /hai/i.test(String(v));
-        return true;
-    };
+    const isInScope = () => true;
 
     let uniqueRows = [];
     if (botIdx !== -1 && apiIdxMain !== -1) {
-        const latestAlive = new Map();   // bot_id -> latest non-dead row
+        const latestAlive = new Map();
         for (const r of bots.rows) {
             const id = r[botIdx];
             if (id == null) continue;
@@ -428,6 +427,16 @@ async function sendViaGmailApi(mimeBuffer) {
     return body.id;
 }
 
+// Send a simple email (no attachments) via the same Gmail OAuth pipeline used
+// for compliance reports. Returns the Gmail message id. Used by the OTP login
+// flow (lib/otp.js mints the code; this just delivers it).
+async function sendMail({ to, subject, text, html }) {
+    if (!process.env.GMAIL_USER) throw new Error('GMAIL_USER is not set in .env.');
+    const builder = getMimeBuilder();
+    const info = await builder.sendMail({ from: process.env.GMAIL_USER, to, subject, text, html });
+    return sendViaGmailApi(info.message);
+}
+
 // Merge per-site recipients with per-agent-type recipients (passed in via opts),
 // dedupe, and fall back to REPORT_RECIPIENT env if nothing else is configured.
 function resolveRecipients(site, opts = {}) {
@@ -453,7 +462,7 @@ async function sendReport(siteName, site, opts = {}) {
     if (!process.env.GMAIL_USER) {
         throw new Error('GMAIL_USER is not set in .env.');
     }
-    const report = await buildReport(siteName, site);
+    const report = await buildReport(siteName, site, { lookback: opts.lookback });
     const { subject, html, text } = renderEmail(report);
 
     // BCC every recipient instead of TO so that each inbox shows just one
@@ -492,7 +501,7 @@ async function sendCombinedReport(agentType, entries, opts = {}) {
     const perSite = [];
     for (const [name, site] of entries) {
         try {
-            const r = await buildReport(name, site);
+            const r = await buildReport(name, site, { lookback: opts.lookback });
             perSite.push({ name, ok: true, totals: r.totals, mismatches: r.mismatches, xlsx: r.xlsxBuffer });
         } catch (err) {
             perSite.push({ name, ok: false, error: err.message });
@@ -508,7 +517,7 @@ async function sendCombinedReport(agentType, entries, opts = {}) {
     }, { total: 0, compatible: 0, incompatible: 0, failed: 0 });
 
     const stamp = new Date().toISOString();
-    const subject = `3PVC Report for ${agentType}`;
+    const subject = `Automated 3PVC compliance report — ${agentType} (${entries.length} site${entries.length === 1 ? '' : 's'})`;
 
     const siteRowsHtml = perSite.map(r => {
         if (!r.ok) {
@@ -527,7 +536,7 @@ async function sendCombinedReport(agentType, entries, opts = {}) {
     }).join('');
 
     const html = `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,sans-serif;color:#222;max-width:920px;margin:auto">
-        <h2 style="margin:0 0 8px">3PVC compliance report — ${escapeHtml(agentType)} (${entries.length} site${entries.length === 1 ? '' : 's'})</h2>
+        <h2 style="margin:0 0 8px">Automated 3PVC compliance report — ${escapeHtml(agentType)} (${entries.length} site${entries.length === 1 ? '' : 's'})</h2>
         <p style="color:#666;margin:0 0 16px">Generated ${escapeHtml(stamp)}</p>
         <table style="border-collapse:collapse;margin-bottom:18px">
             <tr><td style="padding:4px 14px 4px 0;color:#666">Bots evaluated (alive only)</td><td style="padding:4px 0"><b>${agg.total}</b></td></tr>
@@ -591,4 +600,4 @@ async function sendCombinedReport(agentType, entries, opts = {}) {
     };
 }
 
-module.exports = { buildReport, sendReport, sendCombinedReport, renderEmail, resolveRecipients, reportFilename };
+module.exports = { buildReport, sendReport, sendCombinedReport, renderEmail, resolveRecipients, reportFilename, sendMail };

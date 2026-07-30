@@ -49,6 +49,28 @@
 
         <section class="card">
             <div class="card-head">
+                <h2 class="card-title">Usage</h2>
+                <button id="usage-refresh-btn" type="button" class="btn-subtle btn-small">Refresh</button>
+            </div>
+            <div class="stats" style="margin-bottom:0.75rem;">
+                <div class="stat-card"><span class="stat-label">Total logins</span><span class="stat-value" id="usage-total">—</span></div>
+                <div class="stat-card"><span class="stat-label">Unique users</span><span class="stat-value" id="usage-unique">—</span></div>
+                <div class="stat-card"><span class="stat-label">Password logins</span><span class="stat-value" id="usage-password">—</span></div>
+                <div class="stat-card"><span class="stat-label">Email-code logins</span><span class="stat-value" id="usage-otp">—</span></div>
+            </div>
+            <div class="table-wrap" style="max-height:20rem;">
+                <table id="usage-table">
+                    <thead>
+                        <tr><th>Time</th><th>User</th><th>Role</th><th>Method</th><th>IP</th></tr>
+                    </thead>
+                    <tbody id="usage-body"></tbody>
+                </table>
+                <p id="usage-empty" class="muted center">No logins recorded yet.</p>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-head">
                 <h2 class="card-title">Sites</h2>
                 <button id="add-site-btn" type="button">+ Add site</button>
             </div>
