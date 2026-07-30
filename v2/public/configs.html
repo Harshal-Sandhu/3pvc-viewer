@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>3PVC Configs</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div id="login-view" class="view">
+        <form id="login-form" class="card login-card" autocomplete="off">
+            <h1>3PVC Configs</h1>
+            <p class="muted">Sign in to continue</p>
+            <label>Username
+                <input type="text" id="login-user" autocomplete="username" required>
+            </label>
+            <label>Password
+                <input type="password" id="login-pass" autocomplete="current-password" required>
+            </label>
+            <button type="submit" id="login-btn">Sign in</button>
+            <p id="login-error" class="error" hidden></p>
+        </form>
+    </div>
+
+    <div id="app-view" class="view" hidden>
+        <header class="topbar">
+            <h1>3PVC Configs</h1>
+            <div class="topbar-right">
+                <a href="/" class="btn-subtle" role="button">Viewer</a>
+                <a href="/operation" class="btn-subtle" role="button">Operation</a>
+                <a href="/admin" id="admin-link" class="btn-subtle" role="button" hidden>Admin</a>
+                <span id="who" class="muted small"></span>
+                <button id="logout-btn" type="button" class="btn-subtle">Sign out</button>
+            </div>
+        </header>
+
+        <section class="controls card">
+            <label>Site
+                <select id="site-select"></select>
+            </label>
+            <label>Bot
+                <select id="bot-select" disabled></select>
+            </label>
+            <button id="load-btn" type="button">Load configs</button>
+        </section>
+
+        <section class="card">
+            <div class="card-head">
+                <h2 class="card-title">Firmware config</h2>
+                <span id="config-status" class="muted small"></span>
+            </div>
+            <pre id="config-view" class="ops-output">Select a site and a bot.</pre>
+        </section>
+    </div>
+
+    <script src="/configs.js" type="module"></script>
+</body>
+</html>

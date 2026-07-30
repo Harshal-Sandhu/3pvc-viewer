@@ -594,6 +594,11 @@ kbd {
     border-radius: var(--radius);
     background: var(--bg);
 }
+#config-view {
+    min-height: 70vh;
+    max-height: 80vh;
+    font-size: 0.95rem;
+}
 .vda-ip-row {
     display: flex;
     align-items: center;

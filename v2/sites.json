@@ -169,9 +169,10 @@
     }
   },
   "validation_lab": {
-    "ip": "192.168.9.18",
+    "ip": "172.29.40.102",
     "port": 8086,
     "db": "GreyOrange",
+    "configDb": "quicktron_bot_details",
     "measurement": "bot_firmware_version_details",
     "complianceMeasurement": "compliance_details",
     "releasedVdaVersion": "",
@@ -185,17 +186,8 @@
     "butlerIp": "172.29.40.48",
     "targetIp": "192.168.6.34",
     "gorPassword": "apj0702",
-    "botSudoPassword": "apj0702"
-  },
-  "xpo_handm": {
-    "ip": "172.19.40.56",
-    "port": 8086,
-    "db": "GreyOrange",
-    "measurement": "bot_firmware_version_details",
-    "gpmsBridgeIp": "172.25.117.243",
-    "butlerIp": "172.19.40.54",
-    "targetIp": "172.25.117.243",
-    "gorPassword": "apj0702",
-    "agentType": "TTP"
+    "botSudoPassword": "apj0702",
+    "agentType": "",
+    "vendor": ""
   }
 }

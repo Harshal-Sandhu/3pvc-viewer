@@ -256,6 +256,7 @@ function siteToPublic(name, s) {
         ip: s.ip,
         port: s.port,
         db: s.db,
+        configDb: s.configDb || '',
         measurement: s.measurement,
         complianceMeasurement: s.complianceMeasurement || 'compliance_details',
         releasedVdaVersion: s.releasedVdaVersion || '',
@@ -723,7 +724,7 @@ function isReadOnlyInfluxQL(q) {
 }
 
 app.get('/api/query', requireAuth, async (req, res) => {
-    const { site, q } = req.query;
+    const { site, q, db } = req.query;
     if (typeof site !== 'string' || !sites[site]) {
         return res.status(400).json({ error: 'Unknown site' });
     }
@@ -731,7 +732,14 @@ app.get('/api/query', requireAuth, async (req, res) => {
         return res.status(400).json({ error: 'Only single SELECT or SHOW statements are allowed' });
     }
     const s = sites[site];
-    const url = `http://${s.ip}:${s.port}/query?db=${encodeURIComponent(s.db)}&q=${encodeURIComponent(q)}`;
+    let targetDb = s.db;
+    if (typeof db === 'string' && db) {
+        if (db !== s.configDb) {
+            return res.status(400).json({ error: 'Unknown database' });
+        }
+        targetDb = db;
+    }
+    const url = `http://${s.ip}:${s.port}/query?db=${encodeURIComponent(targetDb)}&q=${encodeURIComponent(q)}`;
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 20000);
     try {
