@@ -599,6 +599,16 @@ kbd {
     max-height: 80vh;
     font-size: 0.95rem;
 }
+#config-featured-wrap { max-height: none; margin-bottom: 0.5rem; }
+#config-raw-details { margin-top: 0.75rem; }
+#config-raw-details summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.85rem;
+    padding: 0.3rem 0;
+}
+#config-raw-details summary:hover { color: var(--text); }
+#config-raw-details[open] summary { margin-bottom: 0.5rem; }
 .vda-ip-row {
     display: flex;
     align-items: center;

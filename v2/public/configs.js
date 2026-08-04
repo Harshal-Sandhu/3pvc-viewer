@@ -2,6 +2,8 @@
 // - ES module, no globals on window
 // - All rendered values go through textContent (no innerHTML interpolation)
 
+import { getFeaturedSettings, parseInflux, getLatestPerBot } from './configs-logic.js';
+
 const $ = (sel) => document.querySelector(sel);
 const els = {
     loginView: $('#login-view'),
@@ -24,8 +26,31 @@ const els = {
     load: $('#load-btn'),
 
     status: $('#config-status'),
-    view: $('#config-view')
+    view: $('#config-view'),
+    featuredBody: $('#config-featured-body'),
+    featuredEmpty: $('#config-featured-empty')
 };
+
+// Featured settings — a curated subset of firmware_configs worth showing up
+// front. VTM and HTM bots populate different subsets of /system/nav/config
+// and /hardware/basic; rows simply don't render when a path isn't present,
+// so the same list works for both without needing to know the bot type.
+// (Field list + extraction logic live in configs-logic.js so they're unit
+// testable outside the browser.)
+function renderFeaturedSettings(cfg) {
+    els.featuredBody.replaceChildren();
+    const rows = getFeaturedSettings(cfg);
+    for (const { label, value } of rows) {
+        const tr = document.createElement('tr');
+        const labelTd = document.createElement('td');
+        labelTd.textContent = label;
+        const valueTd = document.createElement('td');
+        valueTd.textContent = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        tr.append(labelTd, valueTd);
+        els.featuredBody.append(tr);
+    }
+    els.featuredEmpty.hidden = rows.length > 0;
+}
 
 const state = {
     sites: [],
@@ -52,15 +77,6 @@ async function api(path, opts = {}) {
         throw err;
     }
     return body;
-}
-
-function parseInflux(result) {
-    if (!result || !result.results || !result.results[0]) return { columns: [], rows: [] };
-    const r0 = result.results[0];
-    if (r0.error) return { error: r0.error, columns: [], rows: [] };
-    if (!r0.series || !r0.series[0]) return { columns: [], rows: [] };
-    const s = r0.series[0];
-    return { columns: s.columns || [], rows: s.values || [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -219,22 +235,6 @@ async function loadConfigs() {
     }
 }
 
-// First-row-wins dedup keyed on the `ip` field, relying on the query's
-// `ORDER BY time DESC` — mirrors app.js's getLatestNonDeadPerBot(), but this
-// dataset has no `bot_id` tag (main4.py writes fields only), so `ip` is the
-// bot identity here instead.
-function getLatestPerBot(columns, rows) {
-    const ipIdx = columns.indexOf('ip');
-    if (ipIdx === -1) return [];
-    const latest = new Map();
-    for (const r of rows) {
-        const ip = r[ipIdx];
-        if (ip == null || latest.has(ip)) continue;
-        latest.set(ip, r);
-    }
-    return [...latest.values()];
-}
-
 function renderBotSelect() {
     resetBotSelect();
     if (state.rows.length === 0) return;
@@ -254,6 +254,8 @@ function renderSelectedBot() {
     const ipIdx = state.columns.indexOf('ip');
     const configIdx = state.columns.indexOf('firmware_configs');
     const ip = els.bot.value;
+    els.featuredBody.replaceChildren();
+    els.featuredEmpty.hidden = true;
     if (!ip) { els.view.textContent = 'Select a bot.'; return; }
     const row = state.rows.find(r => r[ipIdx] === ip);
     if (!row) { els.view.textContent = 'No data for that bot.'; return; }
@@ -263,9 +265,11 @@ function renderSelectedBot() {
     try {
         const parsed = JSON.parse(raw);
         els.view.textContent = JSON.stringify(parsed, null, 2);
+        renderFeaturedSettings(parsed);
     } catch {
         // Not JSON — e.g. an "ERROR: ..." marker from a failed SSH fetch.
         els.view.textContent = raw;
+        els.featuredEmpty.hidden = false;
     }
 }
 

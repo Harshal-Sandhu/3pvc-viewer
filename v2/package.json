@@ -6,6 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test",
     "hash-password": "node scripts/hash-password.js",
     "oauth-setup": "node scripts/oauth-setup.js",
     "scheduler": "node scheduler.js"

@@ -53,7 +53,19 @@
                 <h2 class="card-title">Firmware config</h2>
                 <span id="config-status" class="muted small"></span>
             </div>
-            <pre id="config-view" class="ops-output">Select a site and a bot.</pre>
+
+            <div class="table-wrap" id="config-featured-wrap">
+                <table>
+                    <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+                    <tbody id="config-featured-body"></tbody>
+                </table>
+            </div>
+            <p id="config-featured-empty" class="muted small" hidden>None of the featured settings are present for this bot.</p>
+
+            <details id="config-raw-details">
+                <summary>Show all config</summary>
+                <pre id="config-view" class="ops-output">Select a site and a bot.</pre>
+            </details>
         </section>
     </div>
 
