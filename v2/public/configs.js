@@ -2,7 +2,7 @@
 // - ES module, no globals on window
 // - All rendered values go through textContent (no innerHTML interpolation)
 
-import { getFeaturedSettings, parseInflux, getLatestPerBot } from './configs-logic.js';
+import { getFeaturedSettings, parseInflux, getLatestConfigPerBot } from './configs-logic.js';
 
 const $ = (sel) => document.querySelector(sel);
 const els = {
@@ -221,7 +221,7 @@ async function loadConfigs() {
         const parsed = parseInflux(result);
         if (parsed.error) throw new Error(parsed.error);
         state.columns = parsed.columns;
-        state.rows = getLatestPerBot(parsed.columns, parsed.rows);
+        state.rows = getLatestConfigPerBot(parsed.columns, parsed.rows);
         renderBotSelect();
         setStatus(`Loaded ${state.rows.length} bot(s) from ${site.name}`);
     } catch (err) {
@@ -261,7 +261,11 @@ function renderSelectedBot() {
     if (!row) { els.view.textContent = 'No data for that bot.'; return; }
     if (configIdx === -1) { els.view.textContent = 'This measurement has no firmware_configs field.'; return; }
     const raw = row[configIdx];
-    if (raw == null || raw === '') { els.view.textContent = 'No firmware config recorded for this bot.'; return; }
+    if (raw == null || raw === '') {
+        els.view.textContent = 'No firmware config recorded for this bot.';
+        els.featuredEmpty.hidden = false;
+        return;
+    }
     try {
         const parsed = JSON.parse(raw);
         els.view.textContent = JSON.stringify(parsed, null, 2);

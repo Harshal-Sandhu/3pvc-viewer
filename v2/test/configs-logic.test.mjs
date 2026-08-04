@@ -1,7 +1,7 @@
 // Run with: node --test test/
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getPath, getSignalParam, getFeaturedSettings, parseInflux, getLatestPerBot } from '../public/configs-logic.js';
+import { getPath, getSignalParam, getFeaturedSettings, parseInflux, getLatestConfigPerBot } from '../public/configs-logic.js';
 
 const VTM_CONFIG = {
     '/system/nav/config': {
@@ -93,18 +93,47 @@ test('parseInflux handles an empty series (no matching rows) without throwing', 
     assert.deepEqual(parseInflux(null), { columns: [], rows: [] });
 });
 
-test('getLatestPerBot keeps only the first (most recent) row per ip', () => {
+test('getLatestConfigPerBot prefers a recent row with config over a newer row without one', () => {
     const columns = ['time', 'ip', 'firmware_configs'];
     const rows = [
-        ['t2', '1.1.1.1', 'newest-for-1.1.1.1'],
-        ['t1', '1.1.1.1', 'older-for-1.1.1.1'],
-        ['t2', '2.2.2.2', 'only-row-for-2.2.2.2']
+        ['t3-newest', '1.1.1.1', null],           // stale/duplicate job overwrote it with null
+        ['t2', '1.1.1.1', 'real-config-blob'],     // the good run
+        ['t1-oldest', '1.1.1.1', null]
     ];
-    const latest = getLatestPerBot(columns, rows);
-    assert.equal(latest.length, 2);
-    assert.equal(latest.find(r => r[1] === '1.1.1.1')[2], 'newest-for-1.1.1.1');
+    const result = getLatestConfigPerBot(columns, rows);
+    assert.equal(result.length, 1);
+    assert.equal(result[0][2], 'real-config-blob');
 });
 
-test('getLatestPerBot returns nothing when the dataset has no ip column', () => {
-    assert.deepEqual(getLatestPerBot(['time', 'value'], [['t1', 5]]), []);
+test('getLatestConfigPerBot falls back to the plain latest row if a bot has never had a config', () => {
+    const columns = ['time', 'ip', 'firmware_configs'];
+    const rows = [
+        ['t2-newest', '2.2.2.2', null],
+        ['t1', '2.2.2.2', null]
+    ];
+    const result = getLatestConfigPerBot(columns, rows);
+    assert.equal(result.length, 1);
+    assert.equal(result[0][0], 't2-newest');
+    assert.equal(result[0][2], null);
+});
+
+test('getLatestConfigPerBot keeps every bot even when only some have config data', () => {
+    const columns = ['time', 'ip', 'firmware_configs'];
+    const rows = [
+        ['t2', '1.1.1.1', 'config-for-1'],
+        ['t2', '2.2.2.2', null],
+        ['t1', '2.2.2.2', null]
+    ];
+    const result = getLatestConfigPerBot(columns, rows);
+    assert.equal(result.length, 2);
+});
+
+test('getLatestConfigPerBot treats an empty string the same as no config', () => {
+    const columns = ['time', 'ip', 'firmware_configs'];
+    const rows = [
+        ['t2-newest', '1.1.1.1', ''],
+        ['t1', '1.1.1.1', 'real-config-blob']
+    ];
+    const result = getLatestConfigPerBot(columns, rows);
+    assert.equal(result[0][2], 'real-config-blob');
 });

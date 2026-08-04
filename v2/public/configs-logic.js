@@ -70,15 +70,26 @@ export function parseInflux(result) {
 // First-row-wins dedup keyed on the `ip` field, relying on the query's
 // `ORDER BY time DESC` — mirrors app.js's getLatestNonDeadPerBot(), but this
 // dataset has no `bot_id` tag (main4.py writes fields only), so `ip` is the
-// bot identity here instead.
-export function getLatestPerBot(columns, rows) {
+// bot identity here instead. Per bot it prefers the most recent row that
+// actually HAS a firmware_configs value over the plain latest row --
+// a stale/duplicate ingestion job can overwrite a bot's latest point with a
+// null config shortly after a good one lands, which would otherwise hide
+// perfectly good data behind a newer-but-empty row. Falls back to that
+// bot's absolute latest row if it has never had a config recorded at all,
+// so every bot still appears in the list.
+export function getLatestConfigPerBot(columns, rows) {
     const ipIdx = columns.indexOf('ip');
     if (ipIdx === -1) return [];
-    const latest = new Map();
+    const cfgIdx = columns.indexOf('firmware_configs');
+    const withConfig = new Map();
+    const fallback = new Map();
     for (const r of rows) {
         const ip = r[ipIdx];
-        if (ip == null || latest.has(ip)) continue;
-        latest.set(ip, r);
+        if (ip == null) continue;
+        if (!fallback.has(ip)) fallback.set(ip, r);
+        if (withConfig.has(ip)) continue;
+        const cfg = cfgIdx === -1 ? null : r[cfgIdx];
+        if (cfg != null && cfg !== '') withConfig.set(ip, r);
     }
-    return [...latest.values()];
+    return [...fallback.keys()].map(ip => withConfig.get(ip) || fallback.get(ip));
 }
