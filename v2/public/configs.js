@@ -2,7 +2,7 @@
 // - ES module, no globals on window
 // - All rendered values go through textContent (no innerHTML interpolation)
 
-import { getFeaturedSettings, parseInflux, getLatestConfigPerBot } from './configs-logic.js';
+import { getFeaturedSettings, parseGroupedByBot, parseSingleBotValue } from './configs-logic.js';
 
 const $ = (sel) => document.querySelector(sel);
 const els = {
@@ -209,28 +209,32 @@ function setStatus(message, isError = false) {
 // Load configs for the selected site, keep the latest row per bot (by `ip`)
 // ---------------------------------------------------------------------------
 
+// InfluxQL string literals use single quotes; escape any that appear in a
+// tag value we didn't choose ourselves before interpolating it into a query.
+function influxQuote(value) {
+    return String(value).replace(/'/g, "\\'");
+}
+
 async function loadConfigs() {
     const site = state.selectedSite;
     if (!site) { setStatus('Select a site first', true); return; }
-    // Only ip/bot_id/firmware_configs are ever read from this result (see
-    // renderBotSelect/renderSelectedBot below) -- selecting just those instead
-    // of "*" skips the dozens of small app_* version fields on every row, on
-    // top of the window/limit narrowing below. Kept to 3h/2000 rather than
-    // 24h/5000: firmware_configs can be hundreds of KB per row, and a stale
-    // duplicate ingestion job can null it out on alternating runs (a few
-    // hours of history is plenty to find the last good one -- see
-    // getLatestConfigPerBot), so there's no need to drag a whole day of it
-    // through a single query.
-    const q = `SELECT ip,bot_id,firmware_configs FROM "${site.measurement}" WHERE time > now() - 3h ORDER BY time DESC LIMIT 2000`;
+    // Deliberately does NOT select firmware_configs here -- each bot's config
+    // can be hundreds of KB, so asking for every bot's config just to
+    // populate the dropdown can mean tens of MB in one request (confirmed:
+    // one site alone took 20s+ to transfer partial data before timing out).
+    // This only fetches a tiny field to enumerate live bots; the actual
+    // config is fetched on demand for one bot at a time in
+    // fetchBotConfig() below, once the user actually picks one.
+    const q = `SELECT last(bot_status) AS bot_status FROM "${site.measurement}" WHERE time > now() - 7d GROUP BY bot_id,ip`;
     els.load.disabled = true;
     setStatus('Loading...');
     try {
         const params = new URLSearchParams({ site: site.name, db: site.configDb, q });
         const result = await api('/api/query?' + params.toString());
-        const parsed = parseInflux(result);
+        const parsed = parseGroupedByBot(result, 'bot_status');
         if (parsed.error) throw new Error(parsed.error);
         state.columns = parsed.columns;
-        state.rows = getLatestConfigPerBot(parsed.columns, parsed.rows);
+        state.rows = parsed.rows;
         renderBotSelect();
         setStatus(`Loaded ${state.rows.length} bot(s) from ${site.name}`);
     } catch (err) {
@@ -242,6 +246,19 @@ async function loadConfigs() {
     } finally {
         els.load.disabled = false;
     }
+}
+
+// Fetches a single bot's firmware_configs on demand -- a single-series
+// query, so it's at most one bot's worth of data (~hundreds of KB), not
+// every bot's at once.
+async function fetchBotConfig(site, botId, ip) {
+    const filter = botId != null
+        ? `"bot_id" = '${influxQuote(botId)}'`
+        : `"ip" = '${influxQuote(ip)}'`;
+    const q = `SELECT last(firmware_configs) AS firmware_configs FROM "${site.measurement}" WHERE ${filter} AND time > now() - 7d`;
+    const params = new URLSearchParams({ site: site.name, db: site.configDb, q });
+    const result = await api('/api/query?' + params.toString());
+    return parseSingleBotValue(result);
 }
 
 function renderBotSelect() {
@@ -259,17 +276,32 @@ function renderBotSelect() {
     els.view.textContent = 'Select a bot.';
 }
 
-function renderSelectedBot() {
+// Bumped on every selection so a slow in-flight fetch from a previous pick
+// can't clobber the view after the user has already moved on to another bot.
+let botConfigRequestSeq = 0;
+
+async function renderSelectedBot() {
     const ipIdx = state.columns.indexOf('ip');
-    const configIdx = state.columns.indexOf('firmware_configs');
+    const botIdIdx = state.columns.indexOf('bot_id');
     const ip = els.bot.value;
     els.featuredBody.replaceChildren();
     els.featuredEmpty.hidden = true;
     if (!ip) { els.view.textContent = 'Select a bot.'; return; }
     const row = state.rows.find(r => r[ipIdx] === ip);
     if (!row) { els.view.textContent = 'No data for that bot.'; return; }
-    if (configIdx === -1) { els.view.textContent = 'This measurement has no firmware_configs field.'; return; }
-    const raw = row[configIdx];
+    const botId = botIdIdx !== -1 ? row[botIdIdx] : null;
+
+    const seq = ++botConfigRequestSeq;
+    els.view.textContent = 'Loading config...';
+    let raw;
+    try {
+        raw = await fetchBotConfig(state.selectedSite, botId, ip);
+    } catch (err) {
+        if (seq === botConfigRequestSeq) els.view.textContent = `Error loading config: ${err.message}`;
+        return;
+    }
+    if (seq !== botConfigRequestSeq) return; // a newer selection has since been made
+
     if (raw == null || raw === '') {
         els.view.textContent = 'No firmware config recorded for this bot.';
         els.featuredEmpty.hidden = false;

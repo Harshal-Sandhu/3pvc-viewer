@@ -1,7 +1,7 @@
 // Run with: node --test test/
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getPath, getSignalParam, getFeaturedSettings, parseInflux, getLatestConfigPerBot } from '../public/configs-logic.js';
+import { getPath, getSignalParam, getFeaturedSettings, parseGroupedByBot, parseSingleBotValue } from '../public/configs-logic.js';
 
 const VTM_CONFIG = {
     '/system/nav/config': {
@@ -76,64 +76,47 @@ test('getFeaturedSettings returns nothing for an empty config', () => {
     assert.deepEqual(getFeaturedSettings({}), []);
 });
 
-test('parseInflux extracts columns/rows from a healthy InfluxDB response', () => {
+test('parseGroupedByBot extracts one row per series with its tags and last() value', () => {
     const result = {
-        results: [{ statement_id: 0, series: [{ columns: ['time', 'ip'], values: [['t1', '1.2.3.4']] }] }]
+        results: [{
+            statement_id: 0,
+            series: [
+                { name: 'm', tags: { bot_id: '180', ip: '10.0.0.1' }, columns: ['time', 'bot_status'], values: [['t1', 'ready']] },
+                { name: 'm', tags: { bot_id: '188', ip: '10.0.0.2' }, columns: ['time', 'bot_status'], values: [['t2', 'processing']] }
+            ]
+        }]
     };
-    assert.deepEqual(parseInflux(result), { columns: ['time', 'ip'], rows: [['t1', '1.2.3.4']] });
+    const parsed = parseGroupedByBot(result, 'bot_status');
+    assert.deepEqual(parsed.columns, ['ip', 'bot_id', 'bot_status']);
+    assert.deepEqual(parsed.rows, [
+        ['10.0.0.1', '180', 'ready'],
+        ['10.0.0.2', '188', 'processing']
+    ]);
 });
 
-test('parseInflux surfaces an InfluxDB-reported error instead of throwing', () => {
+test('parseGroupedByBot surfaces an InfluxDB-reported error instead of throwing', () => {
     const result = { results: [{ statement_id: 0, error: 'database not found' }] };
-    assert.equal(parseInflux(result).error, 'database not found');
+    assert.equal(parseGroupedByBot(result, 'bot_status').error, 'database not found');
 });
 
-test('parseInflux handles an empty series (no matching rows) without throwing', () => {
-    assert.deepEqual(parseInflux({ results: [{ statement_id: 0 }] }), { columns: [], rows: [] });
-    assert.deepEqual(parseInflux(null), { columns: [], rows: [] });
+test('parseGroupedByBot returns no rows when there are no matching series', () => {
+    assert.deepEqual(parseGroupedByBot({ results: [{ statement_id: 0 }] }, 'bot_status').rows, []);
+    assert.deepEqual(parseGroupedByBot(null, 'bot_status').rows, []);
 });
 
-test('getLatestConfigPerBot prefers a recent row with config over a newer row without one', () => {
-    const columns = ['time', 'ip', 'firmware_configs'];
-    const rows = [
-        ['t3-newest', '1.1.1.1', null],           // stale/duplicate job overwrote it with null
-        ['t2', '1.1.1.1', 'real-config-blob'],     // the good run
-        ['t1-oldest', '1.1.1.1', null]
-    ];
-    const result = getLatestConfigPerBot(columns, rows);
-    assert.equal(result.length, 1);
-    assert.equal(result[0][2], 'real-config-blob');
+test('parseSingleBotValue reads the value out of a single-series response', () => {
+    const result = {
+        results: [{ statement_id: 0, series: [{ columns: ['time', 'firmware_configs'], values: [['t1', 'the-config-blob']] }] }]
+    };
+    assert.equal(parseSingleBotValue(result), 'the-config-blob');
 });
 
-test('getLatestConfigPerBot falls back to the plain latest row if a bot has never had a config', () => {
-    const columns = ['time', 'ip', 'firmware_configs'];
-    const rows = [
-        ['t2-newest', '2.2.2.2', null],
-        ['t1', '2.2.2.2', null]
-    ];
-    const result = getLatestConfigPerBot(columns, rows);
-    assert.equal(result.length, 1);
-    assert.equal(result[0][0], 't2-newest');
-    assert.equal(result[0][2], null);
+test('parseSingleBotValue returns null when the bot has no matching series', () => {
+    assert.equal(parseSingleBotValue({ results: [{ statement_id: 0 }] }), null);
+    assert.equal(parseSingleBotValue(null), null);
 });
 
-test('getLatestConfigPerBot keeps every bot even when only some have config data', () => {
-    const columns = ['time', 'ip', 'firmware_configs'];
-    const rows = [
-        ['t2', '1.1.1.1', 'config-for-1'],
-        ['t2', '2.2.2.2', null],
-        ['t1', '2.2.2.2', null]
-    ];
-    const result = getLatestConfigPerBot(columns, rows);
-    assert.equal(result.length, 2);
-});
-
-test('getLatestConfigPerBot treats an empty string the same as no config', () => {
-    const columns = ['time', 'ip', 'firmware_configs'];
-    const rows = [
-        ['t2-newest', '1.1.1.1', ''],
-        ['t1', '1.1.1.1', 'real-config-blob']
-    ];
-    const result = getLatestConfigPerBot(columns, rows);
-    assert.equal(result[0][2], 'real-config-blob');
+test('parseSingleBotValue throws on an InfluxDB-reported error', () => {
+    const result = { results: [{ statement_id: 0, error: 'measurement not found' }] };
+    assert.throws(() => parseSingleBotValue(result), /measurement not found/);
 });

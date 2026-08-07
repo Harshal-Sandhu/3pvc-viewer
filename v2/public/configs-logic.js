@@ -58,38 +58,35 @@ export function getFeaturedSettings(cfg) {
     return rows;
 }
 
-export function parseInflux(result) {
-    if (!result || !result.results || !result.results[0]) return { columns: [], rows: [] };
+// Parses an InfluxDB response shaped by `SELECT last(<field>) AS <fieldAlias>
+// ... GROUP BY bot_id,ip` -- one series per bot, each with a single [time,
+// value] row. GROUP BY's last() only ever considers points where that field
+// was actually written, so a stale/duplicate ingestion job writing a point
+// without the field is naturally skipped server-side -- no JS-side "find the
+// latest non-null" dedup needed, and no need to transfer more than one row
+// per bot regardless of how large that field's value is.
+export function parseGroupedByBot(result, fieldAlias) {
+    const columns = ['ip', 'bot_id', fieldAlias];
+    if (!result || !result.results || !result.results[0]) return { columns, rows: [] };
     const r0 = result.results[0];
     if (r0.error) return { error: r0.error, columns: [], rows: [] };
-    if (!r0.series || !r0.series[0]) return { columns: [], rows: [] };
-    const s = r0.series[0];
-    return { columns: s.columns || [], rows: s.values || [] };
+    const rows = (r0.series || []).map((s) => {
+        const tags = s.tags || {};
+        const valueRow = (s.values && s.values[0]) || [];
+        const value = valueRow.length > 1 ? valueRow[1] : null;
+        return [tags.ip ?? null, tags.bot_id ?? null, value];
+    });
+    return { columns, rows };
 }
 
-// First-row-wins dedup keyed on the `ip` field, relying on the query's
-// `ORDER BY time DESC` — mirrors app.js's getLatestNonDeadPerBot(), but this
-// dataset has no `bot_id` tag (main4.py writes fields only), so `ip` is the
-// bot identity here instead. Per bot it prefers the most recent row that
-// actually HAS a firmware_configs value over the plain latest row --
-// a stale/duplicate ingestion job can overwrite a bot's latest point with a
-// null config shortly after a good one lands, which would otherwise hide
-// perfectly good data behind a newer-but-empty row. Falls back to that
-// bot's absolute latest row if it has never had a config recorded at all,
-// so every bot still appears in the list.
-export function getLatestConfigPerBot(columns, rows) {
-    const ipIdx = columns.indexOf('ip');
-    if (ipIdx === -1) return [];
-    const cfgIdx = columns.indexOf('firmware_configs');
-    const withConfig = new Map();
-    const fallback = new Map();
-    for (const r of rows) {
-        const ip = r[ipIdx];
-        if (ip == null) continue;
-        if (!fallback.has(ip)) fallback.set(ip, r);
-        if (withConfig.has(ip)) continue;
-        const cfg = cfgIdx === -1 ? null : r[cfgIdx];
-        if (cfg != null && cfg !== '') withConfig.set(ip, r);
-    }
-    return [...fallback.keys()].map(ip => withConfig.get(ip) || fallback.get(ip));
+// Parses `SELECT last(<field>) AS <fieldAlias> ... WHERE bot_id = '...'`
+// (no GROUP BY -- a single bot's value, fetched on demand). Returns just the
+// value, or null if that bot has never had the field recorded.
+export function parseSingleBotValue(result) {
+    if (!result || !result.results || !result.results[0]) return null;
+    const r0 = result.results[0];
+    if (r0.error) throw new Error(r0.error);
+    const series = r0.series;
+    const valueRow = series && series[0] && series[0].values && series[0].values[0];
+    return valueRow && valueRow.length > 1 ? valueRow[1] : null;
 }
