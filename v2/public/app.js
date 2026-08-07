@@ -583,6 +583,31 @@ function diffIgnoreSet() {
     return s;
 }
 
+// Sites that also capture firmware_configs (see configs.js) can have rows
+// hundreds of KB each -- pulling that into this page's SELECT * turns a
+// normally-instant query into one that can time out, for a field this page
+// never displays anyway. Only sites wired for that feature (configDb set)
+// pay the extra SHOW FIELD KEYS round-trip; every other site's query is
+// unchanged.
+const HEAVY_FIELDS_TO_EXCLUDE = new Set(['firmware_configs']);
+
+async function buildSelectList(site) {
+    if (!site.configDb) return '*';
+    try {
+        const params = new URLSearchParams({ site: site.name, q: `SHOW FIELD KEYS FROM "${site.measurement}"` });
+        const result = await api('/api/query?' + params.toString());
+        const parsed = parseInflux(result);
+        const fieldKeys = parsed.rows.map(r => r[0]).filter(name => !HEAVY_FIELDS_TO_EXCLUDE.has(name));
+        if (!fieldKeys.length) return '*';
+        // Tags (ip, bot_id) don't show up in SHOW FIELD KEYS -- list them
+        // explicitly; selecting a tag/field name InfluxQL doesn't recognize
+        // on this measurement is harmless (that column just comes back null).
+        return ['ip', 'bot_id', ...fieldKeys].join(',');
+    } catch {
+        return '*'; // discovery failed for any reason -- fall back to the old behavior
+    }
+}
+
 // Returns { ref: complianceRow | null, diffs: [{field, actual, expected}] }
 // - ref === null: no compliance row matched this bot's api_version (status unknown)
 // - diffs === []: every overlapping field matched the compliance record
@@ -630,9 +655,10 @@ async function loadData({ silent = false } = {}) {
     // Belt-and-braces: we ALSO drop nulls/empties in JS after parsing, since
     // some Influx setups won't filter null field values via `field != value`.
     const vf = versionField();
-    const q = `SELECT * FROM "${site.measurement}" WHERE "${vf}" != 'dead_bot' AND "${vf}" != '' AND time > now() - ${prefs.lookback} ORDER BY time DESC LIMIT 10000`;
     els.load.disabled = true;
     try {
+        const selectList = await buildSelectList(site);
+        const q = `SELECT ${selectList} FROM "${site.measurement}" WHERE "${vf}" != 'dead_bot' AND "${vf}" != '' AND time > now() - ${prefs.lookback} ORDER BY time DESC LIMIT 10000`;
         const params = new URLSearchParams({ site: site.name, q });
         const compliancePromise = loadCompliance({ silent: true });
         const result = await api('/api/query?' + params.toString());

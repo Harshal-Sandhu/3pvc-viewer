@@ -212,7 +212,16 @@ function setStatus(message, isError = false) {
 async function loadConfigs() {
     const site = state.selectedSite;
     if (!site) { setStatus('Select a site first', true); return; }
-    const q = `SELECT * FROM "${site.measurement}" WHERE time > now() - 24h ORDER BY time DESC LIMIT 5000`;
+    // Only ip/bot_id/firmware_configs are ever read from this result (see
+    // renderBotSelect/renderSelectedBot below) -- selecting just those instead
+    // of "*" skips the dozens of small app_* version fields on every row, on
+    // top of the window/limit narrowing below. Kept to 3h/2000 rather than
+    // 24h/5000: firmware_configs can be hundreds of KB per row, and a stale
+    // duplicate ingestion job can null it out on alternating runs (a few
+    // hours of history is plenty to find the last good one -- see
+    // getLatestConfigPerBot), so there's no need to drag a whole day of it
+    // through a single query.
+    const q = `SELECT ip,bot_id,firmware_configs FROM "${site.measurement}" WHERE time > now() - 3h ORDER BY time DESC LIMIT 2000`;
     els.load.disabled = true;
     setStatus('Loading...');
     try {

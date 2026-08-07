@@ -840,7 +840,7 @@ app.get('/api/query', requireAuth, async (req, res) => {
     }
     const url = `http://${s.ip}:${s.port}/query?db=${encodeURIComponent(targetDb)}&q=${encodeURIComponent(q)}`;
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 20000);
+    const timer = setTimeout(() => ac.abort(), 30000);
     try {
         const r = await fetch(url, { signal: ac.signal });
         const text = await r.text();
