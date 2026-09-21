@@ -79,6 +79,8 @@ const els = {
     compForm: $('#compliance-form'),
     compSite: $('#comp-site'),
     compTarget: $('#comp-target'),
+    compBot: $('#comp-bot'),
+    compImport: $('#comp-import'),
     compFields: $('#comp-fields'),
     compSubmit: $('#comp-submit'),
     compClear: $('#comp-clear'),
@@ -89,7 +91,8 @@ const els = {
 const state = {
     sites: [],
     fields: [],
-    pendingDelete: null
+    pendingDelete: null,
+    compBots: []   // [{ botId, ip }] live bots for the currently selected compliance site
 };
 
 async function api(path, opts = {}) {
@@ -188,6 +191,8 @@ function wireEvents() {
     els.agentRecipientsSendTtp.addEventListener('click', () => onAgentRecipientsSend('TTP', els.agentRecipientsSendTtp));
     els.agentRecipientsSendRelay.addEventListener('click', () => onAgentRecipientsSend('RELAY', els.agentRecipientsSendRelay));
     els.compSite.addEventListener('change', onCompSiteChange);
+    els.compBot.addEventListener('change', () => { els.compImport.disabled = !els.compBot.value; });
+    els.compImport.addEventListener('click', onCompImport);
     els.compForm.addEventListener('submit', onCompSubmit);
     els.compClear.addEventListener('click', () => {
         for (const input of els.compFields.querySelectorAll('input')) input.value = '';
@@ -349,6 +354,7 @@ async function onAgentRecipientsSave(e) {
 async function onCompSiteChange() {
     updateCompTarget();
     const siteName = els.compSite.value;
+    resetCompBotPicker();
     if (!siteName) {
         state.fields = [];
         state.fieldsSource = null;
@@ -375,6 +381,103 @@ async function onCompSiteChange() {
         errEl.className = 'error';
         errEl.textContent = `Could not load columns: ${err.message}`;
         els.compFields.append(errEl);
+    }
+    loadCompBots(siteName)  // loads in parallel with the above; best-effort
+        .catch(err => { if (err.status === 401) { setView("login"); return; } console.warn(err); });
+}
+
+// ---------------------------------------------------------------------------
+// Compliance bot import: prefill the form from a live bot's latest record
+// ---------------------------------------------------------------------------
+
+function resetCompBotPicker() {
+    els.compBot.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '— select a bot to prefill —';
+    els.compBot.append(placeholder);
+    els.compBot.disabled = true;
+    els.compImport.disabled = true;
+    state.compBots = [];
+}
+
+// Per-site version-key column, mirroring the viewer: TTP sites record their
+// bot firmware version under `version`, everything else under `api_version`.
+function versionFieldFor(site) {
+    return site && site.agentType === 'TTP' ? 'version' : 'api_version';
+}
+
+function influxQuote(value) {
+    return String(value).replace(/'/g, "\\'");
+}
+
+async function loadCompBots(siteName) {
+    const site = state.sites.find(s => s.name === siteName);
+    if (!site) { els.compBot.disabled = true; return; }
+    const vf = versionFieldFor(site);
+    const q = `SELECT last(bot_status) AS bot_status FROM "${site.measurement}" WHERE "${vf}" != 'dead_bot' AND "${vf}" != '' AND time > now() - 7d GROUP BY bot_id,ip`;
+    const params = new URLSearchParams({ site: siteName, q });
+    const result = await api('/api/query?' + params.toString());
+    const series = result && result.results && result.results[0] && result.results[0].series;
+    state.compBots = (series || []).map(s => ({
+        botId: s.tags && s.tags.bot_id != null ? s.tags.bot_id : null,
+        ip: s.tags && s.tags.ip != null ? s.tags.ip : null
+    }));
+    els.compBot.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = state.compBots.length ? '— select a bot to prefill —' : 'No live bots recorded';
+    els.compBot.append(placeholder);
+    for (const bot of state.compBots) {
+        const opt = document.createElement('option');
+        opt.value = String(bot.ip);
+        opt.textContent = (bot.botId != null ? bot.botId + ' · ' : '') + (bot.ip ?? '');
+        els.compBot.append(opt);
+    }
+    els.compBot.disabled = state.compBots.length === 0;
+    els.compImport.disabled = true;
+}
+
+async function onCompImport() {
+    const siteName = els.compSite.value;
+    const ip = els.compBot.value;
+    if (!siteName || !ip) { toast('Select a site and a bot', 'warn'); return; }
+    const site = state.sites.find(s => s.name === siteName);
+    const bot = (state.compBots || []).find(b => String(b.ip) === String(ip));
+    if (!site || !bot) return;
+    const filter = bot.botId != null
+        ? `"bot_id" = '${influxQuote(bot.botId)}'`
+        : `"ip" = '${influxQuote(bot.ip)}'`;
+    const q = `SELECT * FROM "${site.measurement}" WHERE ${filter} AND time > now() - 7d ORDER BY time DESC LIMIT 1`;
+    const params = new URLSearchParams({ site: siteName, q });
+    try {
+        els.compImport.disabled = true;
+        const result = await api('/api/query?' + params.toString());
+        const series = result && result.results && result.results[0] && result.results[0].series
+            && result.results[0].series[0];
+        if (!series || !series.values || !series.values[0]) {
+            toast('No recent data for that bot', 'warn');
+            return;
+        }
+        const cols = series.columns || [];
+        const row = series.values[0];
+        let filled = 0;
+        for (const input of els.compFields.querySelectorAll('input')) {
+            const idx = cols.indexOf(input.name);
+            const value = idx >= 0 ? row[idx] : undefined;
+            if (value != null && String(value).trim() !== '') {
+                input.value = typeof value === 'object' ? JSON.stringify(value) : String(value);
+                filled += 1;
+            } else {
+                input.value = '';
+            }
+        }
+        toast(`Imported ${filled} field(s) from ${bot.botId ?? bot.ip}`, 'success');
+    } catch (err) {
+        if (err.status === 401) { setView("login"); return; }
+        toast(err.message, 'error');
+    } finally {
+        els.compImport.disabled = false;
     }
 }
 
@@ -682,6 +785,7 @@ async function onDeleteConfirm() {
 
 function renderCompliancePicker() {
     els.compSite.replaceChildren();
+    resetCompBotPicker();
     const placeholder = document.createElement('option');
     placeholder.value = '';
     placeholder.textContent = state.sites.length ? 'Select site...' : 'No sites configured';

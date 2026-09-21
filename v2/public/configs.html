@@ -42,10 +42,10 @@
             <label>Site
                 <select id="site-select"></select>
             </label>
-            <label>Bot
-                <select id="bot-select" disabled></select>
-            </label>
             <button id="load-btn" type="button">Load configs</button>
+            <label class="search-wrap">
+                <input type="search" id="config-filter" placeholder="Filter (Cmd/Ctrl+K)" autocomplete="off">
+            </label>
         </section>
 
         <section class="card">
@@ -53,20 +53,37 @@
                 <h2 class="card-title">Firmware config</h2>
                 <span id="config-status" class="muted small"></span>
             </div>
-
-            <div class="table-wrap" id="config-featured-wrap">
-                <table>
-                    <thead><tr><th>Setting</th><th>Value</th></tr></thead>
-                    <tbody id="config-featured-body"></tbody>
-                </table>
+            <section id="chips-bar" class="chips-bar" hidden>
+                <span class="muted small">Active filters:</span>
+                <div id="config-chips"></div>
+                <button id="clear-filters" type="button" class="btn-subtle btn-small">Clear all</button>
+            </section>
+            <div class="table-toolbar">
+                <span id="config-row-count" class="muted small"></span>
+                <div class="spacer"></div>
+                <div class="col-menu-wrap">
+                    <button id="col-menu-btn" type="button" class="btn-subtle btn-small">Columns</button>
+                    <div id="col-menu" class="popover" hidden></div>
+                </div>
             </div>
-            <p id="config-featured-empty" class="muted small" hidden>None of the featured settings are present for this bot.</p>
-
-            <details id="config-raw-details">
-                <summary>Show all config</summary>
-                <pre id="config-view" class="ops-output">Select a site and a bot.</pre>
-            </details>
+            <div id="model-tabs" class="model-tabs" role="tablist" hidden></div>
+            <div class="table-wrap" id="config-grid-wrap">
+                <div id="config-model-tables"></div>
+            </div>
+            <p id="config-empty" class="muted small" hidden>No bots loaded yet. Select a site and click Load configs.</p>
         </section>
+    </div>
+
+    <!-- Filter dropdown (positioned via JS) -->
+    <div id="config-filter-popover" class="popover" hidden>
+        <div class="popover-head">
+            <input type="search" id="config-filter-search" placeholder="Search values..." autocomplete="off">
+        </div>
+        <div class="popover-body" id="config-filter-list"></div>
+        <div class="popover-foot">
+            <button id="config-filter-clear" type="button" class="btn-subtle btn-small">Clear</button>
+            <button id="config-filter-apply" type="button" class="btn-small">Apply</button>
+        </div>
     </div>
 
     <script src="/configs.js" type="module"></script>

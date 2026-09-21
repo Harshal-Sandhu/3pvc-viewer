@@ -166,6 +166,18 @@
                     </label>
                     <span class="muted small" id="comp-target"></span>
                 </div>
+                <div class="form-row">
+                    <label>Import from current bot
+                        <select id="comp-bot" disabled>
+                            <option value="">— select a bot to prefill —</option>
+                        </select>
+                    </label>
+                    <button type="button" id="comp-import" class="btn-subtle" disabled>Import bot data</button>
+                </div>
+                <p class="muted small" style="margin:0.5rem 0 0;">
+                    Pick a live bot to copy its latest recorded values into the fields above
+                    before submitting — no manual copy-paste needed.
+                </p>
                 <div id="comp-fields" class="comp-fields-grid"></div>
                 <div class="form-actions">
                     <button type="submit" id="comp-submit">Submit</button>

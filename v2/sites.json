@@ -7,7 +7,18 @@
     "measurement": "bot_firmware_version_details",
     "releasedVdaVersion": "2.1.0-test",
     "agentType": "RELAY",
-    "vendor": "QT"
+    "vendor": "QT",
+    "complianceMeasurement": "compliance_details",
+    "recipients": [],
+    "alertSchedule": {
+      "enabled": false,
+      "frequency": "daily",
+      "time": "08:00",
+      "dayOfWeek": 1
+    },
+    "butlerIp": "172.28.102.32",
+    "targetIp": "10.225.82.10",
+    "gorPassword": "apj0702"
   },
   "walmartpot_staging": {
     "ip": "172.28.48.195",

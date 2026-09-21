@@ -594,21 +594,49 @@ kbd {
     border-radius: var(--radius);
     background: var(--bg);
 }
-#config-view {
-    min-height: 70vh;
-    max-height: 80vh;
-    font-size: 0.95rem;
+/* Configs page: bot-per-row grids grouped by model (HTM / VTM). Rows are
+   bots; every featured setting label becomes a column; the first cell holds
+   an expandable raw-config viewer. */
+.model-table-block { margin-bottom: 1.25rem; }
+.model-title { margin: 0 0 0.4rem; font-size: 1rem; }
+.model-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.75rem 0 0.5rem; }
+.tab-btn {
+    padding: 0.4rem 0.9rem;
+    font-size: 0.85rem;
+    line-height: 1;
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    background: var(--panel-2);
+    color: var(--muted);
+    cursor: pointer;
 }
-#config-featured-wrap { max-height: none; margin-bottom: 0.5rem; }
-#config-raw-details { margin-top: 0.75rem; }
-#config-raw-details summary {
+.tab-btn:hover { filter: brightness(1.15); }
+.tab-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.model-grid thead th, .model-grid tbody td { white-space: normal; vertical-align: top; }
+.model-grid td.config-cell { min-width: 120px; max-width: 260px; word-break: break-word; }
+.model-grid td.config-cell.config-raw { min-width: 190px; max-width: 420px; }
+.model-grid .config-raw summary {
     cursor: pointer;
     color: var(--muted);
-    font-size: 0.85rem;
-    padding: 0.3rem 0;
+    font-size: 0.8rem;
+    padding: 0.15rem 0;
 }
-#config-raw-details summary:hover { color: var(--text); }
-#config-raw-details[open] summary { margin-bottom: 0.5rem; }
+.model-grid .config-raw summary:hover { color: var(--text); }
+.model-grid .config-raw[open] summary { margin-bottom: 0.35rem; }
+.model-grid .config-blob {
+    margin: 0.35rem 0 0;
+    padding: 0.5rem 0.6rem;
+    max-height: 18rem;
+    overflow: auto;
+    background: #0f1218;
+    color: #e6e6e6;
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
 .vda-ip-row {
     display: flex;
     align-items: center;
