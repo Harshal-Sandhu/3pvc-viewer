@@ -419,10 +419,20 @@ async function loadCompBots(siteName) {
     const params = new URLSearchParams({ site: siteName, q });
     const result = await api('/api/query?' + params.toString());
     const series = result && result.results && result.results[0] && result.results[0].series;
-    state.compBots = (series || []).map(s => ({
-        botId: s.tags && s.tags.bot_id != null ? s.tags.bot_id : null,
-        ip: s.tags && s.tags.ip != null ? s.tags.ip : null
-    }));
+    state.compBots = (series || [])
+        .filter(s => {
+            // Drop bots whose latest status is dead. Filtering here (not in the
+            // Influx WHERE clause) keeps sites whose measurement has no
+            // bot_status field working — such bots just aren't filtered.
+            const cols = s.columns || [];
+            const statusIdx = cols.indexOf('bot_status');
+            const status = statusIdx >= 0 && s.values && s.values[0] ? s.values[0][statusIdx] : null;
+            return status == null || String(status).toLowerCase() !== 'dead_bot';
+        })
+        .map(s => ({
+            botId: s.tags && s.tags.bot_id != null ? s.tags.bot_id : null,
+            ip: s.tags && s.tags.ip != null ? s.tags.ip : null
+        }));
     els.compBot.replaceChildren();
     const placeholder = document.createElement('option');
     placeholder.value = '';
@@ -445,10 +455,11 @@ async function onCompImport() {
     const site = state.sites.find(s => s.name === siteName);
     const bot = (state.compBots || []).find(b => String(b.ip) === String(ip));
     if (!site || !bot) return;
+    const vf = versionFieldFor(site);
     const filter = bot.botId != null
         ? `"bot_id" = '${influxQuote(bot.botId)}'`
         : `"ip" = '${influxQuote(bot.ip)}'`;
-    const q = `SELECT * FROM "${site.measurement}" WHERE ${filter} AND time > now() - 7d ORDER BY time DESC LIMIT 1`;
+    const q = `SELECT * FROM "${site.measurement}" WHERE ${filter} AND "${vf}" != 'dead_bot' AND "${vf}" != '' AND time > now() - 7d ORDER BY time DESC LIMIT 1`;
     const params = new URLSearchParams({ site: siteName, q });
     try {
         els.compImport.disabled = true;
