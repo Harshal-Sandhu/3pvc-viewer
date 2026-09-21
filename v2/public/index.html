@@ -84,8 +84,13 @@
 
         <section class="card chart-card" id="chart-card" hidden>
             <div class="card-head">
-                <h2 class="card-title">VDA version distribution</h2>
-                <span class="muted small">Click a bar to filter</span>
+                <h2 class="card-title">Version distribution</h2>
+                <div class="chart-controls">
+                    <label class="inline muted small">Column
+                        <select id="chart-column"></select>
+                    </label>
+                    <span class="muted small">Click a bar to filter to those bots</span>
+                </div>
             </div>
             <div id="chart" class="chart"></div>
         </section>
@@ -106,6 +111,7 @@
         </section>
 
         <section class="card">
+            <div id="version-tabs" class="model-tabs" role="tablist" hidden></div>
             <div class="table-toolbar">
                 <label class="inline small muted">
                     <input type="checkbox" id="unique-only"> Latest record per bot only

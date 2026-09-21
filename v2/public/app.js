@@ -39,6 +39,7 @@ const els = {
 
     chartCard: $('#chart-card'),
     chart: $('#chart'),
+    chartColumn: $('#chart-column'),
 
     vdaAlertSection: $('#vda-alert-section'),
     vdaAlertCount: $('#vda-alert-count'),
@@ -55,6 +56,8 @@ const els = {
 
     colMenuBtn: $('#col-menu-btn'),
     colMenu: $('#col-menu'),
+
+    versionTabs: $('#version-tabs'),
 
     filterPop: $('#filter-popover'),
     filterPopSearch: $('#filter-popover-search'),
@@ -151,6 +154,8 @@ const state = {
     refreshTimer: null,
     refreshCountdown: null,
     activeFunnelCol: null,
+    chartColumn: 'vda_version',  // distribution column; vda_version unless the user picks another
+    versionTab: null,            // api_version tab filter; null = All
 
     // Secondary table: compliance_details (or whatever the site has configured)
     compliance: {
@@ -379,6 +384,7 @@ function wireEvents() {
         state.rows = [];
         state.columns = [];
         state.columnFilters.clear();
+        state.versionTab = null;
         state.compliance.columns = [];
         state.compliance.rows = [];
         state.expandedExpected.clear();
@@ -394,6 +400,11 @@ function wireEvents() {
         prefs.autoRefresh = Number(els.autoRefresh.value) || 0;
         savePrefs();
         applyAutoRefresh();
+    });
+
+    els.chartColumn.addEventListener('change', () => {
+        state.chartColumn = els.chartColumn.value;
+        if (state.rows.length > 0) renderTable();
     });
 
     els.clearFilters.addEventListener('click', clearAllFilters);
@@ -912,18 +923,31 @@ function getRowsAfterTtpHaiFilter(rows) {
     });
 }
 
-function getFilteredRows() {
-    let rows = state.rows;
+// Common prefix of the filtering pipeline, shared by the table/export and the
+// api_version tab bar (which must be built from pre-tab rows).
+function pipelinePrefix(rows) {
     rows = getRowsAfterTtpHaiFilter(rows);
-    // Always reduce to "latest non-dead row per bot" — same rule as the
-    // report builder. The "Latest record per bot only" checkbox is now a
-    // no-op (kept in markup so existing keybinding doesn't error).
     rows = getLatestNonDeadPerBot(rows);
     rows = getRowsAfterColumnFilters(rows);
     rows = getRowsAfterQuickFilter(rows);
     rows = getRowsAfterGlobalText(rows);
+    return rows;
+}
+
+function getFilteredRows() {
+    let rows = pipelinePrefix(state.rows);
+    rows = getRowsAfterVersionTab(rows);
     rows = getRowsAfterSort(rows);
     return rows;
+}
+
+// Version tab filter: keep only rows whose version key (api_version/version)
+// equals the selected tab. null tab = All.
+function getRowsAfterVersionTab(rows) {
+    if (!state.versionTab) return rows;
+    const vIdx = state.columns.indexOf(versionField());
+    if (vIdx === -1) return rows;
+    return rows.filter(r => String(r[vIdx] == null ? '' : r[vIdx]) === state.versionTab);
 }
 
 // Filter out dead rows immediately after loading from Influx so nothing
@@ -998,22 +1022,58 @@ function getAlertSourceRows() {
 // Rendering: table + stats + chips + chart
 // ---------------------------------------------------------------------------
 
+// Builds the api_version tab bar ("All" + one tab per version key value).
+// Counts are bots (rows are already reduced to latest non-dead per bot).
+function renderVersionTabs(rows) {
+    els.versionTabs.replaceChildren();
+    els.versionTabs.hidden = state.rows.length === 0;
+    if (state.rows.length === 0) return;
+    const vIdx = state.columns.indexOf(versionField());
+    const groups = new Map();
+    for (const r of rows) {
+        if (vIdx === -1) continue;
+        const v = String(r[vIdx] == null ? '' : r[vIdx]);
+        groups.set(v, (groups.get(v) || 0) + 1);
+    }
+    let active = state.versionTab;
+    if (active != null && !groups.has(active)) active = null;
+    const order = Array.from(groups.entries())
+        .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
+    const mk = (label, count, isActive, value) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'tab-btn' + (isActive ? ' active' : '');
+        btn.setAttribute('role', 'tab');
+        btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        btn.textContent = `${label} (${count})`;
+        btn.addEventListener('click', () => { state.versionTab = value; renderTable(); });
+        return btn;
+    };
+    els.versionTabs.append(mk('All', rows.length, active == null, null));
+    for (const [v, c] of order) {
+        els.versionTabs.append(mk(v, c, active === v, v));
+    }
+}
+
 function renderTable() {
-    const rows = getFilteredRows();
+    const preTabRows = pipelinePrefix(state.rows);
+    renderVersionTabs(preTabRows);
+    const rows = getRowsAfterVersionTab(preTabRows);
+    const sorted = getRowsAfterSort(rows);
     renderHead();
-    renderBody(rows);
+    renderBody(sorted);
     renderChips();
-    renderStats(rows);
-    renderChart(rows);
+    renderStats(sorted);
+    renderChart(sorted);
     // Alerts use their own source so the panel stays populated regardless of
     // the "Latest record per bot only" checkbox / column filters in the table.
-    renderVdaAlerts(getAlertSourceRows());
+    renderVdaAlerts(getRowsAfterVersionTab(getAlertSourceRows()));
     renderColMenu();
     updateActiveStatCard();
     els.rowCount.textContent = state.rows.length
         ? `Showing ${rows.length} of ${state.rows.length} rows`
         : '';
-    els.empty.hidden = rows.length > 0;
+    els.empty.hidden = sorted.length > 0;
     els.empty.textContent = state.rows.length === 0
         ? 'Select a site and click Load data.'
         : 'No rows match the current filter.';
@@ -1293,31 +1353,43 @@ function clearAllFilters() {
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function renderChart(rows) {
-    const vdaIdx = state.columns.indexOf('vda_version');
-    if (vdaIdx === -1 || rows.length === 0) {
+    const col = syncChartColumnOptions();
+    const colIdx = state.columns.indexOf(col);
+    if (rows.length === 0) {
         els.chartCard.hidden = true;
         els.chart.replaceChildren();
         return;
     }
     const counts = new Map();
     for (const r of rows) {
-        const v = r[vdaIdx];
+        const v = r[colIdx];
         if (v == null) continue;
         const key = String(v);
         counts.set(key, (counts.get(key) || 0) + 1);
     }
-    if (counts.size === 0) {
-        els.chartCard.hidden = true;
+    if (colIdx === -1 || counts.size === 0) {
+        els.chartCard.hidden = false;
         els.chart.replaceChildren();
+        const p = document.createElement('p');
+        p.className = 'muted center';
+        p.textContent = 'No value';
+        els.chart.append(p);
         return;
     }
     els.chartCard.hidden = false;
-    const entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
-    // A version is "released" if any bot's api_version maps to it via compliance_details.
+    let entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+    const MAX_BARS = 30;
+    const more = entries.length - MAX_BARS;
+    entries = entries.slice(0, MAX_BARS);
+    // A version is "released" only for the vda_version column: green if any
+    // bot's api_version maps to it via compliance_details.
+    const isVda = col === 'vda_version';
     const expectedSet = new Set();
-    for (const r of rows) {
-        const e = getExpectedVdaForRow(r);
-        if (e != null) expectedSet.add(String(e));
+    if (isVda) {
+        for (const r of rows) {
+            const e = getExpectedVdaForRow(r);
+            if (e != null) expectedSet.add(String(e));
+        }
     }
 
     const barW = 60, gap = 18, leftPad = 12, rightPad = 12, topPad = 24, botPad = 40;
@@ -1336,7 +1408,7 @@ function renderChart(rows) {
         const h = Math.max(2, Math.round((count / max) * maxH));
         const y = topPad + maxH - h;
 
-        const isReleased = expectedSet.has(version);
+        const isReleased = isVda && expectedSet.has(version);
         const rect = document.createElementNS(SVG_NS, 'rect');
         rect.setAttribute('class', 'bar' + (isReleased ? ' bar-released' : ''));
         rect.setAttribute('x', String(x));
@@ -1346,11 +1418,11 @@ function renderChart(rows) {
         rect.setAttribute('rx', '4');
         rect.setAttribute('fill', isReleased ? '#00c853' : '#4facfe');
         rect.addEventListener('click', () => {
-            state.columnFilters.set('vda_version', new Set([version]));
+            state.columnFilters.set(col, new Set([version]));
             renderTable();
         });
         const title = document.createElementNS(SVG_NS, 'title');
-        title.textContent = `${version}: ${count}${isReleased ? ' (released)' : ''}`;
+        title.textContent = `${col}=${version}: ${count}${isReleased ? ' (released)' : ''}`;
         rect.append(title);
         svg.append(rect);
 
@@ -1375,6 +1447,50 @@ function renderChart(rows) {
     });
 
     els.chart.replaceChildren(svg);
+    if (more > 0) {
+        const note = document.createElement('p');
+        note.className = 'muted small';
+        note.textContent = `Showing top ${entries.length} of ${more + entries.length} values for ${col}.`;
+        els.chart.append(note);
+    }
+}
+
+function syncChartColumnOptions() {
+    // Columns worth charting: skip the raw timestamp.
+    const options = state.columns.filter(c => c !== 'time');
+    if (options.length === 0) {
+        els.chartColumn.replaceChildren();
+        return 'vda_version';
+    }
+    const current = els.chartColumn.value;
+    const desired =
+        (current && options.includes(current)) ? current :
+        (state.chartColumn && options.includes(state.chartColumn)) ? state.chartColumn :
+        options.includes('vda_version') ? 'vda_version' :
+        options.includes(versionField()) ? versionField() :
+        options[0];
+    if (state.chartColumn !== desired) state.chartColumn = desired;
+    const prev = els.chartColumn.value;
+    if (prev !== desired) {
+        els.chartColumn.replaceChildren();
+        for (const c of options) {
+            const opt = document.createElement('option');
+            opt.value = c;
+            opt.textContent = c;
+            els.chartColumn.append(opt);
+        }
+        els.chartColumn.value = desired;
+    } else if (els.chartColumn.options.length !== options.length) {
+        els.chartColumn.replaceChildren();
+        for (const c of options) {
+            const opt = document.createElement('option');
+            opt.value = c;
+            opt.textContent = c;
+            els.chartColumn.append(opt);
+        }
+        els.chartColumn.value = desired;
+    }
+    return desired;
 }
 
 // ---------------------------------------------------------------------------
