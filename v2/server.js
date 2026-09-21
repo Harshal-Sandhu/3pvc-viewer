@@ -481,7 +481,7 @@ const SITE_COLUMNS_TTL_MS = 60 * 1000;
 async function influxShow(s, q) {
     const url = `http://${s.ip}:${s.port}/query?db=${encodeURIComponent(s.db)}&q=${encodeURIComponent(q)}`;
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 10000);
+    const timer = setTimeout(() => ac.abort(), 30000);
     try {
         const r = await fetch(url, { signal: ac.signal });
         if (!r.ok) throw new Error(`InfluxDB HTTP ${r.status}`);
