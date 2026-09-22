@@ -61,10 +61,10 @@ function normalizeBucket(raw) {
         bcc: Array.isArray(o.bcc) ? o.bcc.filter(s => typeof s === 'string') : []
     };
 }
-let agentRecipients = { TTP: emptyBucket(), RELAY: emptyBucket() };
+let agentRecipients = { TTP: emptyBucket(), RELAY: emptyBucket(), RTP: emptyBucket() };
 try {
     const raw = JSON.parse(fs.readFileSync(AGENT_RECIPIENTS_PATH, 'utf8'));
-    for (const k of ['TTP', 'RELAY']) {
+    for (const k of ['TTP', 'RELAY', 'RTP']) {
         agentRecipients[k] = normalizeBucket(raw[k]);
     }
 } catch (e) {
@@ -254,9 +254,31 @@ app.post('/api/otp/request', loginThrottle, async (req, res) => {
     try {
         await alerts.sendMail({
             to: result.email,
-            subject: 'Your 3PVC login code',
-            text: `Your 3PVC login code is ${result.code}. It expires in 5 minutes.`,
-            html: `<p>Your 3PVC login code is <b style="font-size:1.2em;letter-spacing:0.1em">${result.code}</b>.</p><p>It expires in 5 minutes.</p>`
+            subject: '3PVC — Your one-time login code',
+            text: [
+                'Hi,',
+                '',
+                'You requested a one-time login code for the 3PVC administration and viewing portal.',
+                '',
+                `Your code: ${result.code}`,
+                `This code is valid for 5 minutes from the moment it was issued.`,
+                '',
+                'If you did not request this code, you can safely ignore this message.',
+                '',
+                'Regards,',
+                '3PVC Portal'
+            ].join('\n'),
+            html: `
+                <div style="font-family:Arial,Helvetica,sans-serif;max-width:520px;margin:0 auto;color:#1c2733">
+                    <p>Hi,</p>
+                    <p>You requested a one-time login code for the <b>3PVC Portal</b>.</p>
+                    <p style="margin:20px 0 6px 0">Your one-time login code is:</p>
+                    <p style="margin:0 0 6px 0;font-size:28px;font-weight:bold;letter-spacing:0.25em;color:#0b66c3">${result.code}</p>
+                    <p style="margin:0;color:#5a6673">This code is valid for <b>5 minutes</b> from the moment it was issued.</p>
+                    <hr style="border:none;border-top:1px solid #e3e8ee;margin:24px 0">
+                    <p style="font-size:13px;color:#8a94a0">If you did not request this code, you can safely ignore this email — no action is needed.</p>
+                    <p style="font-size:13px;color:#8a94a0">Regards,<br>3PVC Portal</p>
+                </div>`
         });
         res.json({ ok: true });
     } catch (err) {
@@ -331,12 +353,13 @@ function siteToPublic(name, s) {
         gpmsBridgeIp: s.gpmsBridgeIp || '',
         agentType: s.agentType || '',
         vendor: s.vendor || '',
+        versionField: s.versionField || '',
         hasGorPassword: !!s.gorPassword,
         hasBotSudoPassword: !!s.botSudoPassword
     };
 }
 
-const VALID_AGENT_TYPES = new Set(['', 'TTP', 'RELAY']);
+const VALID_AGENT_TYPES = new Set(['', 'TTP', 'RELAY', 'RTP']);
 
 function normalizeSchedule(sched) {
     const s = sched && typeof sched === 'object' ? sched : {};
@@ -431,13 +454,14 @@ app.get('/api/agent-recipients', requireAuth, (req, res) => {
 app.put('/api/agent-recipients', requireAdmin, requireAdminUnlocked, (req, res) => {
     const body = req.body || {};
     if (typeof body !== 'object' || Array.isArray(body)) {
-        return res.status(400).json({ error: 'Body must be {TTP:{to:[],cc:[],bcc:[]}, RELAY:{...}}' });
+        return res.status(400).json({ error: 'Body must be {TTP:{to:[],cc:[],bcc:[]}, RELAY:{...}, RTP:{...}}' });
     }
     const next = {
         TTP:   { ...agentRecipients.TTP },
-        RELAY: { ...agentRecipients.RELAY }
+        RELAY: { ...agentRecipients.RELAY },
+        RTP:   { ...agentRecipients.RTP }
     };
-    for (const agent of ['TTP', 'RELAY']) {
+    for (const agent of ['TTP', 'RELAY', 'RTP']) {
         if (body[agent] === undefined) continue;
         const bucket = body[agent];
         // Backward-compat: bare array means "bcc" only.
@@ -589,10 +613,15 @@ function validateSiteFields(body, { allowName = false } = {}) {
         if (typeof body.gpmsBridgeIp !== 'string' || !/^[a-zA-Z0-9.\-]{1,253}$/.test(body.gpmsBridgeIp)) errors.push('gpmsBridgeIp must be a valid hostname or IPv4');
     }
     if (body.agentType != null && body.agentType !== '') {
-        if (!VALID_AGENT_TYPES.has(body.agentType)) errors.push('agentType must be TTP or RELAY');
+        if (!VALID_AGENT_TYPES.has(body.agentType)) errors.push('agentType must be TTP, RELAY, or RTP');
     }
     if (body.vendor != null && body.vendor !== '') {
         if (!VALID_VENDORS.has(body.vendor)) errors.push('vendor must be QT or HAI');
+    }
+    if (body.versionField != null && body.versionField !== '') {
+        if (typeof body.versionField !== 'string' || body.versionField.length > 128) {
+            errors.push('versionField must be a string up to 128 chars');
+        }
     }
     return errors;
 }
@@ -627,7 +656,8 @@ app.post('/api/sites', requireAdmin, requireAdminUnlocked, (req, res) => {
         agentType: (body.agentType || '').trim(),
         vendor: (body.vendor || '').trim(),
         gorPassword: (body.gorPassword || '').trim(),
-        botSudoPassword: (body.botSudoPassword || '').trim()
+        botSudoPassword: (body.botSudoPassword || '').trim(),
+        versionField: (body.versionField || '').trim()
     };
     try {
         saveSites();
@@ -670,6 +700,7 @@ app.put('/api/sites/:name', requireAdmin, requireAdminUnlocked, (req, res) => {
     if (body.vendor != null) s.vendor = body.vendor.trim();
     if (body.gorPassword != null && body.gorPassword !== '') s.gorPassword = body.gorPassword.trim();
     if (body.botSudoPassword != null && body.botSudoPassword !== '') s.botSudoPassword = body.botSudoPassword.trim();
+    if (body.versionField != null) s.versionField = body.versionField.trim();
 
     try {
         saveSites();
@@ -783,8 +814,8 @@ app.post('/api/alerts/:site/send', requireAdmin, requireAdminUnlocked, async (re
 // list here, not per-site recipients).
 app.post('/api/alerts/by-agent/:agentType/send', requireAdmin, requireAdminUnlocked, async (req, res) => {
     const { agentType } = req.params;
-    if (!['TTP', 'RELAY'].includes(agentType)) {
-        return res.status(400).json({ error: 'agentType must be TTP or RELAY' });
+    if (!['TTP', 'RELAY', 'RTP'].includes(agentType)) {
+        return res.status(400).json({ error: 'agentType must be TTP, RELAY, or RTP' });
     }
     const targets = Object.entries(sites).filter(([, s]) => s.agentType === agentType);
     if (targets.length === 0) {

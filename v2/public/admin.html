@@ -141,6 +141,24 @@
                         <button type="button" id="agent-recipients-send-relay" class="btn-subtle">Send now for all RELAY sites</button>
                     </div>
                 </fieldset>
+                <fieldset style="border:1px solid var(--border);border-radius:8px;padding:0.75rem 1rem;margin-bottom:0.75rem;">
+                    <legend style="padding:0 0.4rem;font-weight:600;">RTP</legend>
+                    <p class="muted small" style="margin:0 0 0.5rem;">Sites: meli_spo4 (and any future RTP site).</p>
+                    <div class="form-grid">
+                        <label>To
+                            <input type="text" id="agent-recipients-rtp-to" placeholder="primary-owner@example.com">
+                        </label>
+                        <label>CC
+                            <input type="text" id="agent-recipients-rtp-cc" placeholder="team-lead@example.com">
+                        </label>
+                        <label>BCC
+                            <input type="text" id="agent-recipients-rtp-bcc" placeholder="rtp-alerts@example.com">
+                        </label>
+                    </div>
+                    <div class="form-actions" style="margin-top:0.5rem;">
+                        <button type="button" id="agent-recipients-send-rtp" class="btn-subtle">Send now for all RTP sites</button>
+                    </div>
+                </fieldset>
                 <p class="muted small" style="margin:0 0 0.5rem;">
                     Comma-separated. Leave a field blank to skip that header. If <code>To</code> is empty, the mail's
                     To header shows just the sender (privacy-friendly default).
@@ -209,6 +227,7 @@
                         <option value="">— unspecified —</option>
                         <option value="TTP">TTP</option>
                         <option value="RELAY">RELAY</option>
+                        <option value="RTP">RTP</option>
                     </select>
                     <span class="hint">Bot agent running at this site. Used to group/distinguish sites in the viewer.</span>
                 </label>
@@ -239,6 +258,10 @@
                 <label>Compliance measurement
                     <input type="text" id="site-compliance-measurement" value="compliance_details">
                     <span class="hint">Measurement loaded into the compliance table — the validation team's "expected" records.</span>
+                </label>
+                <label>Version column (advanced)
+                    <input type="text" id="site-version-field" placeholder="auto (api_version / version)">
+                    <span class="hint">Column treated as the bot "version" for the chart, tabs, and dead-bot filtering. Defaults to <code>version</code> for TTP, <code>container_quicktron_wrapper</code> for RTP, and <code>api_version</code> otherwise. Set for sites with custom schemas.</span>
                 </label>
                 <label class="form-grid-wide">Alert recipients
                     <input type="text" id="site-recipients" placeholder="alice@example.com, bob@example.com">

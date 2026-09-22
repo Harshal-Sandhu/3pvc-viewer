@@ -585,7 +585,11 @@ function getExpectedVdaForRow(row) {
 // `api_version`. The site object comes from /api/sites which now exposes
 // agentType.
 function versionField() {
-    return state.selectedSite && state.selectedSite.agentType === 'TTP' ? 'version' : 'api_version';
+    const override = state.selectedSite && state.selectedSite.versionField;
+    if (override) return override;
+    const agentType = state.selectedSite && state.selectedSite.agentType;
+    if (agentType === 'RTP') return 'container_quicktron_wrapper';
+    return agentType === 'TTP' ? 'version' : 'api_version';
 }
 const DIFF_IGNORE_BASE = new Set(['time']);
 function diffIgnoreSet() {

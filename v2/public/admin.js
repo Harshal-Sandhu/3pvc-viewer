@@ -43,6 +43,7 @@ const els = {
     siteDb: $('#site-db'),
     siteMeasurement: $('#site-measurement'),
     siteComplianceMeasurement: $('#site-compliance-measurement'),
+    siteVersionField: $('#site-version-field'),
     siteRecipients: $('#site-recipients'),
     siteAlertEnabled: $('#site-alert-enabled'),
     siteAlertFrequency: $('#site-alert-frequency'),
@@ -66,9 +67,13 @@ const els = {
     agentRecipientsRelayTo:  $('#agent-recipients-relay-to'),
     agentRecipientsRelayCc:  $('#agent-recipients-relay-cc'),
     agentRecipientsRelayBcc: $('#agent-recipients-relay-bcc'),
+    agentRecipientsRtpTo:  $('#agent-recipients-rtp-to'),
+    agentRecipientsRtpCc:  $('#agent-recipients-rtp-cc'),
+    agentRecipientsRtpBcc: $('#agent-recipients-rtp-bcc'),
     agentRecipientsSave: $('#agent-recipients-save'),
     agentRecipientsSendTtp: $('#agent-recipients-send-ttp'),
     agentRecipientsSendRelay: $('#agent-recipients-send-relay'),
+    agentRecipientsSendRtp: $('#agent-recipients-send-rtp'),
 
     deleteModal: $('#delete-modal'),
     deleteModalClose: $('#delete-modal-close'),
@@ -190,6 +195,7 @@ function wireEvents() {
     els.agentRecipientsForm.addEventListener('submit', onAgentRecipientsSave);
     els.agentRecipientsSendTtp.addEventListener('click', () => onAgentRecipientsSend('TTP', els.agentRecipientsSendTtp));
     els.agentRecipientsSendRelay.addEventListener('click', () => onAgentRecipientsSend('RELAY', els.agentRecipientsSendRelay));
+    els.agentRecipientsSendRtp.addEventListener('click', () => onAgentRecipientsSend('RTP', els.agentRecipientsSendRtp));
     els.compSite.addEventListener('change', onCompSiteChange);
     els.compBot.addEventListener('change', () => { els.compImport.disabled = !els.compBot.value; });
     els.compImport.addEventListener('click', onCompImport);
@@ -214,10 +220,10 @@ async function refreshAll() {
     try {
         const [sitesData, agentR] = await Promise.all([
             api('/api/sites'),
-            api('/api/agent-recipients').catch(() => ({ TTP: [], RELAY: [] }))
+            api('/api/agent-recipients').catch(() => ({ TTP: [], RELAY: [], RTP: [] }))
         ]);
         state.sites = sitesData;
-        state.agentRecipients = agentR || { TTP: [], RELAY: [] };
+        state.agentRecipients = agentR || { TTP: [], RELAY: [], RTP: [] };
         // Per-site fields are now loaded on site selection; until a site is
         // picked we keep the form empty with a hint.
         state.fields = [];
@@ -273,12 +279,16 @@ function bucketOf(agent) {
 function renderAgentRecipients() {
     const t = bucketOf('TTP');
     const r = bucketOf('RELAY');
+    const p = bucketOf('RTP');
     els.agentRecipientsTtpTo.value    = asListString(t.to);
     els.agentRecipientsTtpCc.value    = asListString(t.cc);
     els.agentRecipientsTtpBcc.value   = asListString(t.bcc);
     els.agentRecipientsRelayTo.value  = asListString(r.to);
     els.agentRecipientsRelayCc.value  = asListString(r.cc);
     els.agentRecipientsRelayBcc.value = asListString(r.bcc);
+    els.agentRecipientsRtpTo.value    = asListString(p.to);
+    els.agentRecipientsRtpCc.value    = asListString(p.cc);
+    els.agentRecipientsRtpBcc.value   = asListString(p.bcc);
 }
 
 async function onAgentRecipientsSend(agentType, btn) {
@@ -334,6 +344,11 @@ async function onAgentRecipientsSave(e) {
             to:  asEmailList(els.agentRecipientsRelayTo.value),
             cc:  asEmailList(els.agentRecipientsRelayCc.value),
             bcc: asEmailList(els.agentRecipientsRelayBcc.value)
+        },
+        RTP: {
+            to:  asEmailList(els.agentRecipientsRtpTo.value),
+            cc:  asEmailList(els.agentRecipientsRtpCc.value),
+            bcc: asEmailList(els.agentRecipientsRtpBcc.value)
         }
     };
     try {
@@ -342,7 +357,7 @@ async function onAgentRecipientsSave(e) {
         state.agentRecipients = res.agentRecipients;
         renderAgentRecipients();
         const sum = (b) => b.to.length + b.cc.length + b.bcc.length;
-        toast(`Saved: TTP=${sum(payload.TTP)} addrs, RELAY=${sum(payload.RELAY)} addrs`, 'success');
+        toast(`Saved: TTP=${sum(payload.TTP)} addrs, RELAY=${sum(payload.RELAY)} addrs, RTP=${sum(payload.RTP)} addrs`, 'success');
     } catch (err) {
         if (err.status === 401) { setView("login"); return; }
         toast(err.message, 'error');
@@ -402,8 +417,10 @@ function resetCompBotPicker() {
 }
 
 // Per-site version-key column, mirroring the viewer: TTP sites record their
-// bot firmware version under `version`, everything else under `api_version`.
+// bot firmware version under `version`, RTP sites (docker-container schema)
+// under `container_quicktron_wrapper`, everything else under `api_version`.
 function versionFieldFor(site) {
+    if (site && site.agentType === 'RTP') return 'container_quicktron_wrapper';
     return site && site.agentType === 'TTP' ? 'version' : 'api_version';
 }
 
@@ -663,6 +680,7 @@ function openSiteModal(site) {
         els.siteDb.value = site.db;
         els.siteMeasurement.value = site.measurement;
         els.siteComplianceMeasurement.value = site.complianceMeasurement;
+        els.siteVersionField.value = site.versionField || '';
         els.siteRecipients.value = (site.recipients || []).join(', ');
         const sched = site.alertSchedule || {};
         els.siteAlertEnabled.checked = !!sched.enabled;
@@ -687,6 +705,7 @@ function openSiteModal(site) {
         els.siteDb.value = 'GreyOrange';
         els.siteMeasurement.value = 'bot_firmware_version_details';
         els.siteComplianceMeasurement.value = 'compliance_details';
+        els.siteVersionField.value = '';
         els.siteRecipients.value = '';
         els.siteAlertEnabled.checked = false;
         els.siteAlertFrequency.value = 'daily';
@@ -731,6 +750,7 @@ async function onSiteSave(e) {
         },
         agentType: els.siteAgentType.value,
         vendor: els.siteVendor.value,
+        versionField: els.siteVersionField.value.trim(),
         butlerIp: els.siteButlerIp.value.trim(),
         targetIp: els.siteTargetIp.value.trim()
     };

@@ -731,6 +731,9 @@ function influxQuote(value) {
 // Per-site version-key column, mirroring the viewer: TTP sites record bot
 // firmware under `version`, everything else under `api_version`.
 function versionField(site) {
+    const override = site && site.versionField;
+    if (override) return override;
+    if (site && site.agentType === 'RTP') return 'container_quicktron_wrapper';
     return site && site.agentType === 'TTP' ? 'version' : 'api_version';
 }
 

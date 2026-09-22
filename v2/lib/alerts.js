@@ -20,8 +20,14 @@ const nodemailer = require('nodemailer');
 // is added at runtime — it's the lookup key, not a comparable field.
 const DIFF_IGNORE_BASE = new Set(['time']);
 
-// TTP sites use `version` as the compliance key; everything else uses `api_version`.
+// TTP sites use `version` as the compliance key; RTP sites (docker-container
+// schema, e.g. meli) use `container_quicktron_wrapper`; everything else uses
+// `api_version`. An explicit per-site `versionField` override wins — sites
+// using docker-container naming don't have either of the TTP/RELAY columns.
 function versionFieldFor(site) {
+    const override = site && site.versionField && site.versionField.trim();
+    if (override) return override;
+    if (site && site.agentType === 'RTP') return 'container_quicktron_wrapper';
     return site && site.agentType === 'TTP' ? 'version' : 'api_version';
 }
 
