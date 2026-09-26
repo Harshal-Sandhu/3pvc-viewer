@@ -1353,7 +1353,8 @@ const MAINTENANCE_COMMANDS_BY_VENDOR = {
         vdarestart: { sudo: true,  cmd: 'systemctl restart vda_remote.service' },
         vdastop:    { sudo: true,  cmd: 'systemctl stop vda_remote.service' },
         vdastart:   { sudo: true,  cmd: 'systemctl start vda_remote.service' },
-        savelog:    { sudo: false, cmd: 'bash /home/gor/save_all_logs_ttp.sh' }
+        savelog:    { sudo: false, cmd: 'bash /home/gor/save_all_logs_ttp.sh' },
+        reboot:     { sudo: true, cmd: 'reboot', disconnectOk: true }
     },
     // HAI bots — aliases collected from gor@htm_110 (HAI HTM bot).
     HAI: {
@@ -1365,7 +1366,8 @@ const MAINTENANCE_COMMANDS_BY_VENDOR = {
         fwv:          { sudo: false, cmd: '/bin/bash /home/gor/vda_remote/get_fw_version.sh' },
         navrestart:   { sudo: true,  cmd: 'supervisorctl restart nav_process' },
         ipurestart:   { sudo: true,  cmd: 'supervisorctl restart camera_server_ipu' },
-        kubotrestart: { sudo: true,  cmd: '/etc/kubot_application.sh restart' }
+        kubotrestart: { sudo: true,  cmd: '/etc/kubot_application.sh restart' },
+        reboot:       { sudo: true,  cmd: 'reboot', disconnectOk: true }
     }
 };
 const VALID_VENDORS = new Set(['', 'QT', 'HAI']);
@@ -1503,9 +1505,21 @@ app.post(
                         command: shellCmd,
                         timeoutMs: MAINTENANCE_PER_BOT_TIMEOUT_MS
                     });
+                    let code = r.code;
+                    let note;
+                    // disconnectOk = a command that is *expected* to take the
+                    // machine down mid-run (e.g. reboot). The bot drops the SSH
+                    // connection before the command can report exit 0, so a
+                    // dropped connection (ssh exit 255 / "closed by remote
+                    // host") right after starting is treated as success.
+                    if (spec.disconnectOk && (code === 255 || /closed by remote host|connection (?:closed|reset|timed out)/i.test(r.stderr))) {
+                        code = 0;
+                        note = 'bot went offline mid-command (expected for reboot)';
+                    }
                     evt = {
                         type: 'result', workerId, ip: t.ip, section: t.section, port,
-                        code: r.code,
+                        code,
+                        note,
                         stdout: r.stdout.slice(0, 16384),
                         stderr: r.stderr.slice(0, 16384),
                         elapsedMs: Date.now() - bStart

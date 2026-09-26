@@ -4,6 +4,8 @@
 // - SVG built via createElementNS (no innerHTML)
 // - All long-lived UI state persists in localStorage
 
+import { firmwareColumns, buildFirmwareGrid } from './firmware-grid-logic.js';
+
 // ---------------------------------------------------------------------------
 // DOM handles
 // ---------------------------------------------------------------------------
@@ -40,6 +42,11 @@ const els = {
     chartCard: $('#chart-card'),
     chart: $('#chart'),
     chartColumn: $('#chart-column'),
+
+    fwCard: $('#fw-card'),
+    fwGrid: $('#fw-grid'),
+    fwClearBtn: $('#fw-clear-btn'),
+    fwSummary: $('#fw-card .fw-summary-text'),
 
     vdaAlertSection: $('#vda-alert-section'),
     vdaAlertCount: $('#vda-alert-count'),
@@ -156,6 +163,7 @@ const state = {
     activeFunnelCol: null,
     chartColumn: 'vda_version',  // distribution column; vda_version unless the user picks another
     versionTab: null,            // api_version tab filter; null = All
+    fwHighlight: null,           // { col, value } — variant chip whose bots are highlighted in the table
 
     // Secondary table: compliance_details (or whatever the site has configured)
     compliance: {
@@ -385,6 +393,7 @@ function wireEvents() {
         state.columns = [];
         state.columnFilters.clear();
         state.versionTab = null;
+        state.fwHighlight = null;
         state.compliance.columns = [];
         state.compliance.rows = [];
         state.expandedExpected.clear();
@@ -405,6 +414,16 @@ function wireEvents() {
     els.chartColumn.addEventListener('change', () => {
         state.chartColumn = els.chartColumn.value;
         if (state.rows.length > 0) renderTable();
+    });
+
+    els.fwClearBtn.addEventListener('click', clearFwHighlight);
+
+    // Render the per-component charts on demand when the card is opened —
+    // they're skipped while collapsed to keep loads snappy.
+    els.fwCard.addEventListener('toggle', () => {
+        if (els.fwCard.open && state.rows.length > 0 && firmwareColumns(state.columns).length > 0) {
+            renderFirmwareGrid(getRowsAfterVersionTab(pipelinePrefix(state.rows)));
+        }
     });
 
     els.clearFilters.addEventListener('click', clearAllFilters);
@@ -681,6 +700,7 @@ async function loadData({ silent = false } = {}) {
         if (parsed.error) throw new Error(parsed.error);
         state.columns = parsed.columns;
         state.rows = dropDeadRowsAtLoad(parsed.columns, parsed.rows, vf);
+        state.fwHighlight = null;
         state.lastLoadedAt = new Date();
         renderTable();
         if (!silent) toast(`Loaded ${state.rows.length} alive rows from ${site.name}`, 'success');
@@ -1069,6 +1089,7 @@ function renderTable() {
     renderChips();
     renderStats(sorted);
     renderChart(sorted);
+    renderFirmwareGrid(rows);
     // Alerts use their own source so the panel stays populated regardless of
     // the "Latest record per bot only" checkbox / column filters in the table.
     renderVdaAlerts(getRowsAfterVersionTab(getAlertSourceRows()));
@@ -1136,6 +1157,12 @@ function renderBody(rows) {
         const tr = document.createElement('tr');
         const { ref, diffs } = getDiffForRow(row);
         if (ref) tr.classList.add(diffs.length === 0 ? 'match' : 'mismatch');
+        if (state.fwHighlight) {
+            const hiIdx = state.columns.indexOf(state.fwHighlight.col);
+            if (hiIdx !== -1 && row[hiIdx] != null && String(row[hiIdx]) === String(state.fwHighlight.value)) {
+                tr.classList.add('fw-hl');
+            }
+        }
         const diffFields = new Set(diffs.map(d => d.field));
         tr.addEventListener('click', (e) => {
             if (e.target.closest('button')) return;
@@ -1420,7 +1447,7 @@ function renderChart(rows) {
         rect.setAttribute('width', String(barW));
         rect.setAttribute('height', String(h));
         rect.setAttribute('rx', '4');
-        rect.setAttribute('fill', isReleased ? '#00c853' : '#4facfe');
+        rect.setAttribute('fill', isReleased ? '#2ee6a8' : '#5b8bff');
         rect.addEventListener('click', () => {
             state.columnFilters.set(col, new Set([version]));
             renderTable();
@@ -1495,6 +1522,113 @@ function syncChartColumnOptions() {
         els.chartColumn.value = desired;
     }
     return desired;
+}
+
+// ---------------------------------------------------------------------------
+// Firmware versions grid
+// ---------------------------------------------------------------------------
+
+// Fleet-wide view over every firmware component at once. Data computation
+// lives in firmware-grid-logic.js (pure, unit tested) — this file only maps
+// blocks to DOM. One block per component, drawn as a mini bar chart: each bar
+// is a distinct running version, its height = bots running it. Clicking a bar
+// highlights exactly those bots in the table.
+const FW_MAX_BARS = 20;
+
+function renderFirmwareGrid(rows) {
+    const hasFirmware = state.selectedSite && rows.length > 0 && firmwareColumns(state.columns).length > 0;
+    els.fwCard.hidden = !hasFirmware;
+    if (!hasFirmware) {
+        els.fwGrid.replaceChildren();
+        els.fwClearBtn.hidden = true;
+        els.fwSummary.textContent = '';
+        return;
+    }
+    els.fwClearBtn.hidden = !state.fwHighlight;
+    els.fwGrid.replaceChildren();
+
+    const blocks = buildFirmwareGrid(state.columns, rows, FW_MAX_BARS);
+    if (!blocks.length) {
+        els.fwSummary.textContent = 'No firmware components found';
+        return;
+    }
+    const totalBots = rows.length;
+    els.fwSummary.textContent = `${blocks.length} component${blocks.length !== 1 ? 's' : ''} · ${totalBots} bots`;
+
+    // Only build the per-component charts when the panel is open, so loading a
+    // big site stays snappy while the card stays collapsed by default.
+    if (!els.fwCard.open) return;
+
+    const frag = document.createDocumentFragment();
+    for (const block of blocks) {
+        const { col, label, entries, totalVariants, truncated } = block;
+        const blockEl = document.createElement('div');
+        blockEl.className = 'fw-comp';
+        const labelEl = document.createElement('span');
+        labelEl.className = 'fw-comp-label';
+        labelEl.textContent = label;
+        labelEl.title = col;
+        blockEl.append(labelEl);
+
+        const chartEl = document.createElement('div');
+        chartEl.className = 'fw-chart-wrap';
+        chartEl.append(renderFirmwareBarChart(col, entries));
+        blockEl.append(chartEl);
+
+        if (truncated > 0) {
+            const more = document.createElement('div');
+            more.className = 'fw-more';
+            more.textContent = `… ${truncated} more variant${truncated !== 1 ? 's' : ''} (of ${totalVariants})`;
+            blockEl.append(more);
+        }
+        frag.append(blockEl);
+    }
+    els.fwGrid.append(frag);
+}
+
+// Mini horizontal bar chart for one component. Bar length ∝ bot count; each
+// bar is labelled with the variant and count, and toggles the fleet highlight.
+function renderFirmwareBarChart(col, entries) {
+    const container = document.createElement('div');
+    container.className = 'fw-bars';
+
+    const max = Math.max(...entries.map(e => e.count));
+    for (const { value, count } of entries) {
+        const active = state.fwHighlight && state.fwHighlight.col === col && String(state.fwHighlight.value) === value;
+        const pct = max === 0 ? 0 : Math.max(4, Math.round((count / max) * 100));
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'fw-bar-row' + (active ? ' active' : '');
+        row.title = `${col} = ${value} (${count} bot${count !== 1 ? 's' : ''})`;
+
+        const bar = document.createElement('span');
+        bar.className = 'fw-bar';
+        bar.style.width = pct + '%';
+        row.append(bar);
+
+        const text = document.createElement('span');
+        text.className = 'fw-bar-text';
+        text.textContent = value;
+        row.append(text);
+
+        const n = document.createElement('span');
+        n.className = 'fw-bar-count';
+        n.textContent = `×${count}`;
+        row.append(n);
+
+        row.addEventListener('click', () => {
+            const isActive = state.fwHighlight && state.fwHighlight.col === col && String(state.fwHighlight.value) === value;
+            state.fwHighlight = isActive ? null : { col, value };
+            renderTable();
+        });
+        container.append(row);
+    }
+    return container;
+}
+
+function clearFwHighlight() {
+    state.fwHighlight = null;
+    renderTable();
 }
 
 // ---------------------------------------------------------------------------

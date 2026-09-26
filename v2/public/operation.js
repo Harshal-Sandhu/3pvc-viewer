@@ -496,6 +496,37 @@ function ipSortKey(ip) {
     return ip.split('.').reduce((acc, part) => acc * 256 + (parseInt(part, 10) || 0), 0);
 }
 
+// Natural sort key for a bot's inventory entry: primary = bot id (numeric
+// parts compared as numbers), fallback = IP for bots without a mapped id.
+function botSortKey(bot) {
+    return {
+        id: state.vdaIpToBot[bot.ip] ? String(state.vdaIpToBot[bot.ip]).toLowerCase() : '',
+        ip: ipSortKey(bot.ip)
+    };
+}
+function compareBots(a, b) {
+    const ka = botSortKey(a);
+    const kb = botSortKey(b);
+    if (ka.id && kb.id) {
+        const la = ka.id.split(/(\d+)/);
+        const lb = kb.id.split(/(\d+)/);
+        const n = Math.max(la.length, lb.length);
+        for (let i = 0; i < n; i++) {
+            const sa = la[i] ?? '';
+            const sb = lb[i] ?? '';
+            if (sa === sb) continue;
+            const na = /^\d+$/.test(sa) ? parseInt(sa, 10) : null;
+            const nb = /^\d+$/.test(sb) ? parseInt(sb, 10) : null;
+            if (na != null && nb != null) return na - nb;
+            return sa < sb ? -1 : 1;
+        }
+        return 0;
+    }
+    if (ka.id) return -1;
+    if (kb.id) return 1;
+    return ka.ip - kb.ip;
+}
+
 function populateBotSectionSelect() {
     els.vdaBotSection.replaceChildren();
     const placeholder = document.createElement('option');
@@ -527,7 +558,7 @@ function renderIpCheckboxes(sectionName) {
         els.vdaIpsWrap.hidden = true;
         return;
     }
-    const ips = state.vdaSections[sectionName].slice().sort((a, b) => ipSortKey(a.ip) - ipSortKey(b.ip));
+    const ips = state.vdaSections[sectionName].slice().sort(compareBots);
     if (ips.length === 0) {
         els.vdaIpsWrap.hidden = false;
         const note = document.createElement('p');
@@ -815,7 +846,7 @@ function renderMtIpCheckboxes(sectionName) {
         els.mtIpsWrap.hidden = true;
         return;
     }
-    const ips = state.vdaSections[sectionName].slice().sort((a, b) => ipSortKey(a.ip) - ipSortKey(b.ip));
+    const ips = state.vdaSections[sectionName].slice().sort(compareBots);
     if (ips.length === 0) {
         els.mtIpsWrap.hidden = false;
         const note = document.createElement('p');
@@ -993,11 +1024,14 @@ async function onMtRun() {
             let head;
             if (b.status === 'pending') head = `[pending]  ${b.section}  ${b.ip}:${b.port}`;
             else if (b.status === 'running') head = `[running w${b.workerId}]  ${b.section}  ${b.ip}:${b.port}`;
-            else if (b.status === 'ok') head = `────── ${b.section}  ${b.ip}:${b.port}  OK  (${fmtElapsed(b.elapsedMs)}) ──────`;
+            else if (b.status === 'ok') head = b.note
+                ? `────── ${b.section}  ${b.ip}:${b.port}  OK — ${b.note}  (${fmtElapsed(b.elapsedMs)}) ──────`
+                : `────── ${b.section}  ${b.ip}:${b.port}  OK  (${fmtElapsed(b.elapsedMs)}) ──────`;
             else head = `────── ${b.section}  ${b.ip}:${b.port}  FAILED (exit ${b.code})  (${fmtElapsed(b.elapsedMs)}) ──────`;
             lines.push(head);
             if (b.status === 'ok' || b.status === 'fail') {
                 if (b.stdout) lines.push(b.stdout.trimEnd());
+                if (b.note && !b.stdout) lines.push('(no output — ' + b.note + ')');
                 if (b.stderr) lines.push('[stderr] ' + b.stderr.trimEnd());
                 if (!b.stdout && !b.stderr) lines.push('(no output)');
                 lines.push('');
@@ -1051,6 +1085,7 @@ async function onMtRun() {
                 const b = botState.get(keyOf(ev)) || { ip: ev.ip, section: ev.section, port: ev.port };
                 b.status = ev.code === 0 ? 'ok' : 'fail';
                 b.code = ev.code;
+                b.note = ev.note;
                 b.stdout = ev.stdout;
                 b.stderr = ev.stderr;
                 b.elapsedMs = ev.elapsedMs;
