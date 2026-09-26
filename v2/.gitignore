@@ -2,3 +2,9 @@ node_modules/
 .env
 *.log
 .DS_Store
+
+# Server-local runtime state and per-deployment config — never commit these.
+.health-state.json
+.health-state.json.tmp
+health-alert-config.json
+health-alert-config.json.tmp

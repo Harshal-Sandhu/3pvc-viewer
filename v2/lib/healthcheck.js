@@ -228,11 +228,199 @@ async function checkAllSites(sites, opts = {}) {
     return Promise.all(names.map(name => checkSite(name, sites[name], opts)));
 }
 
+// ---------------------------------------------------------------------------
+// Health-mail configuration (edited from the admin page)
+//
+// Shape:
+//   {
+//     enabled: true,
+//     recipients: { to: [], cc: [], bcc: [] },
+//     schedule: { time: '08:00', dayOfWeek: [0..6] },   // 0 = Sunday
+//     staleDays: 3,
+//     sendWhenAllHealthy: true,     // still send the daily digest when nothing is wrong
+//     alertOnNewOutage: false       // ignore the daily cadence and page immediately
+//   }
+// ---------------------------------------------------------------------------
+
+const DEFAULT_SEND_TIME = '08:00';
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+
+function defaultHealthConfig() {
+    return {
+        enabled: true,
+        recipients: { to: [], cc: [], bcc: [] },
+        schedule: { time: DEFAULT_SEND_TIME, dayOfWeek: ALL_DAYS.slice() },
+        staleDays: DEFAULT_STALE_DAYS,
+        sendWhenAllHealthy: true,
+        alertOnNewOutage: false
+    };
+}
+
+function normalizeRecipients(raw) {
+    const bucket = (raw && typeof raw === 'object') ? raw : {};
+    const list = (v) => (Array.isArray(v) ? v.filter(s => typeof s === 'string') : []);
+    return { to: list(bucket.to), cc: list(bucket.cc), bcc: list(bucket.bcc) };
+}
+
+// Tolerant loader: a missing/partial file falls back to defaults field by field,
+// so a hand-edited config can never take the watchdog down.
+function normalizeHealthConfig(raw) {
+    const d = defaultHealthConfig();
+    if (!raw || typeof raw !== 'object') return d;
+    const sched = (raw.schedule && typeof raw.schedule === 'object') ? raw.schedule : {};
+    const time = typeof sched.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(sched.time) ? sched.time : d.schedule.time;
+    const days = Array.isArray(sched.dayOfWeek)
+        ? Array.from(new Set(sched.dayOfWeek.filter(n => Number.isInteger(n) && n >= 0 && n <= 6))).sort((a, b) => a - b)
+        : d.schedule.dayOfWeek;
+    return {
+        enabled: typeof raw.enabled === 'boolean' ? raw.enabled : d.enabled,
+        recipients: normalizeRecipients(raw.recipients),
+        schedule: { time, dayOfWeek: days.length ? days : d.schedule.dayOfWeek.slice() },
+        staleDays: Number.isFinite(raw.staleDays) && raw.staleDays > 0 ? raw.staleDays : d.staleDays,
+        sendWhenAllHealthy: typeof raw.sendWhenAllHealthy === 'boolean' ? raw.sendWhenAllHealthy : d.sendWhenAllHealthy,
+        alertOnNewOutage: typeof raw.alertOnNewOutage === 'boolean' ? raw.alertOnNewOutage : d.alertOnNewOutage
+    };
+}
+
+function validateEmails(list, label) {
+    const out = [];
+    for (const raw of list || []) {
+        const v = String(raw).trim();
+        if (!v) continue;
+        if (v.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+            return { ok: false, error: `${label}: invalid email "${v}"` };
+        }
+        out.push(v);
+    }
+    return { ok: true, value: out };
+}
+
+// Strict validator for the admin PUT endpoint. Returns a fully normalized
+// config, or { ok: false, error } with a message safe to show the user.
+function validateHealthConfig(input) {
+    if (input == null) return { ok: true, value: defaultHealthConfig() };
+    if (typeof input !== 'object' || Array.isArray(input)) {
+        return { ok: false, error: 'Config must be an object' };
+    }
+    const base = defaultHealthConfig();
+    const out = { ...base };
+
+    if (input.enabled !== undefined) {
+        if (typeof input.enabled !== 'boolean') return { ok: false, error: 'enabled must be true or false' };
+        out.enabled = input.enabled;
+    }
+    if (input.staleDays !== undefined) {
+        const n = Number(input.staleDays);
+        if (!Number.isFinite(n) || n < 1 || n > 365) return { ok: false, error: 'staleDays must be between 1 and 365' };
+        out.staleDays = n;
+    }
+    for (const flag of ['sendWhenAllHealthy', 'alertOnNewOutage']) {
+        if (input[flag] === undefined) continue;
+        if (typeof input[flag] !== 'boolean') return { ok: false, error: `${flag} must be true or false` };
+        out[flag] = input[flag];
+    }
+    if (input.recipients !== undefined) {
+        const r = input.recipients;
+        if (r === null) {
+            out.recipients = base.recipients;
+        } else {
+            if (typeof r !== 'object' || Array.isArray(r)) return { ok: false, error: 'recipients must be { to, cc, bcc }' };
+            const norm = {};
+            for (const field of ['to', 'cc', 'bcc']) {
+                if (r[field] === undefined) { norm[field] = base.recipients[field]; continue; }
+                const v = Array.isArray(r[field]) ? r[field] : (typeof r[field] === 'string' ? r[field].split(',') : null);
+                if (v === null) return { ok: false, error: `recipients.${field} must be an array or comma-separated string` };
+                const check = validateEmails(v, `recipients.${field}`);
+                if (!check.ok) return check;
+                norm[field] = Array.from(new Set(check.value.map(s => s.toLowerCase())));
+            }
+            out.recipients = norm;
+        }
+    }
+    if (input.schedule !== undefined) {
+        const s = input.schedule;
+        if (s === null) {
+            out.schedule = base.schedule;
+        } else {
+            if (typeof s !== 'object' || Array.isArray(s)) return { ok: false, error: 'schedule must be { time, dayOfWeek }' };
+            if (s.time !== undefined) {
+                if (!(typeof s.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(s.time))) {
+                    return { ok: false, error: 'schedule.time must be HH:MM in 24h format' };
+                }
+                out.schedule.time = s.time;
+            }
+            if (s.dayOfWeek !== undefined) {
+                const d = Array.isArray(s.dayOfWeek) ? s.dayOfWeek : (typeof s.dayOfWeek === 'number' ? [s.dayOfWeek] : null);
+                if (d === null) return { ok: false, error: 'schedule.dayOfWeek must be an array of 0-6 (0 = Sunday)' };
+                const days = Array.from(new Set(d.filter(n => Number.isInteger(n) && n >= 0 && n <= 6))).sort((a, b) => a - b);
+                if (!days.length) return { ok: false, error: 'schedule.dayOfWeek must include at least one day' };
+                out.schedule.dayOfWeek = days;
+            }
+        }
+    }
+    return { ok: true, value: out };
+}
+
+// Local-date key (YYYY-MM-DD) used to mark which day's digest has gone out.
+function localDateKey(ms) {
+    const d = new Date(ms);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function localWeekday(ms) {
+    return new Date(ms).getDay();
+}
+
+function minutesOfDay(ms) {
+    const d = new Date(ms);
+    return d.getHours() * 60 + d.getMinutes();
+}
+
+function parseHhMm(s) {
+    const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(s || '');
+    return m ? (Number(m[1]) * 60 + Number(m[2])) : Number(DEFAULT_SEND_TIME.slice(0, 2)) * 60;
+}
+
+// True when the daily digest for the day containing `nowMs` has not been sent
+// yet and the configured send time has arrived (or passed).
+// Returns { due, markDate }: markDate should be persisted on a non-send-day so
+// the scheduler does not keep re-evaluating a day it already decided to skip.
+function dueForDailySend({ nowMs, schedule, lastSentDate }) {
+    if (!schedule) return { due: false, markDate: null };
+    const today = localDateKey(nowMs);
+    if (lastSentDate === today) return { due: false, markDate: null }; // already sent today
+    if (!schedule.dayOfWeek.includes(localWeekday(nowMs))) {
+        return { due: false, markDate: today }; // not a send day — skip today
+    }
+    if (minutesOfDay(nowMs) < parseHhMm(schedule.time)) {
+        return { due: false, markDate: null }; // before today's send time
+    }
+    return { due: true, markDate: null };
+}
+
+// Next moment the digest is allowed to go out, for display in the admin page.
+function nextSendAt({ nowMs, schedule }) {
+    if (!schedule) return null;
+    const target = parseHhMm(schedule.time);
+    const days = schedule.dayOfWeek.length ? schedule.dayOfWeek : ALL_DAYS;
+    for (let i = 0; i < 8; i++) {
+        const probe = new Date(nowMs);
+        probe.setDate(probe.getDate() + i);
+        if (!days.includes(probe.getDay())) continue;
+        const at = new Date(probe);
+        at.setHours(Math.floor(target / 60), target % 60, 0, 0);
+        if (at.getTime() > nowMs) return at.getTime();
+    }
+    return null;
+}
+
 module.exports = {
     DEFAULT_STALE_DAYS,
     DEFAULT_TCP_TIMEOUT_MS,
     DEFAULT_HTTP_TIMEOUT_MS,
     OLLAMA_DEFAULT_URL,
+    ALL_DAYS,
     isStale,
     ageInDays,
     summarize,
@@ -241,5 +429,12 @@ module.exports = {
     httpGet,
     checkSite,
     checkOllama,
-    checkAllSites
+    checkAllSites,
+    defaultHealthConfig,
+    normalizeHealthConfig,
+    validateHealthConfig,
+    localDateKey,
+    localWeekday,
+    dueForDailySend,
+    nextSendAt
 };

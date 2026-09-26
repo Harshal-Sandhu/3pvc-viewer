@@ -436,10 +436,14 @@ async function sendViaGmailApi(mimeBuffer) {
 // Send a simple email (no attachments) via the same Gmail OAuth pipeline used
 // for compliance reports. Returns the Gmail message id. Used by the OTP login
 // flow (lib/otp.js mints the code; this just delivers it).
-async function sendMail({ to, subject, text, html }) {
+async function sendMail({ to, cc, bcc, subject, text, html }) {
     if (!process.env.GMAIL_USER) throw new Error('GMAIL_USER is not set in .env.');
     const builder = getMimeBuilder();
-    const info = await builder.sendMail({ from: process.env.GMAIL_USER, to, subject, text, html });
+    const info = await builder.sendMail({
+        from: process.env.GMAIL_USER,
+        to, cc, bcc,
+        subject, text, html
+    });
     return sendViaGmailApi(info.message);
 }
 

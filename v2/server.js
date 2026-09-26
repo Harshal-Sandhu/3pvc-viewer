@@ -9,6 +9,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { runOnSiteServer, runOnBot, readRemoteFile, writeRemoteFile } = require('./lib/sshChain');
 const { parseInventory, parseInventoryPorts, applyActiveIps, applyMultiSectionActiveIps, updateGroupVars, parseGroupVars } = require('./lib/vdaInventory');
 const otp = require('./lib/otp');
+const healthcheck = require('./lib/healthcheck');
 const multer = require('multer');
 const os = require('os');
 const crypto = require('crypto');
@@ -74,6 +75,36 @@ function saveAgentRecipients() {
     const tmp = AGENT_RECIPIENTS_PATH + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(agentRecipients, null, 2));
     fs.renameSync(tmp, AGENT_RECIPIENTS_PATH);
+}
+
+// Health-watchdog mail settings, edited from the admin page. Read by
+// bin/health-watchdog.js on every tick, so changes take effect without a
+// restart. See lib/healthcheck.js for the shape and defaults.
+const HEALTH_CONFIG_PATH = path.join(__dirname, 'health-alert-config.json');
+let healthConfig = healthcheck.normalizeHealthConfig({});
+try {
+    healthConfig = healthcheck.normalizeHealthConfig(JSON.parse(fs.readFileSync(HEALTH_CONFIG_PATH, 'utf8')));
+} catch (e) {
+    if (e.code !== 'ENOENT') console.error('Failed to load health-alert-config.json:', e.message);
+}
+function saveHealthConfig() {
+    const tmp = HEALTH_CONFIG_PATH + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(healthConfig, null, 2));
+    fs.renameSync(tmp, HEALTH_CONFIG_PATH);
+}
+// People already present in mail-recipients.json, offered as ready-made
+// choices in the admin UI so nobody has to type addresses by hand.
+function knownRecipientList() {
+    const out = new Set();
+    try {
+        const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'mail-recipients.json'), 'utf8'));
+        for (const bucket of [raw.to, raw.cc, raw.bcc]) {
+            for (const v of bucket || []) if (typeof v === 'string' && v.trim()) out.add(v.trim().toLowerCase());
+        }
+    } catch (e) {
+        if (e.code !== 'ENOENT') console.error('Failed to read mail-recipients.json:', e.message);
+    }
+    return Array.from(out).sort();
 }
 
 for (const [name, s] of Object.entries(sites)) {
@@ -489,6 +520,67 @@ app.put('/api/agent-recipients', requireAdmin, requireAdminUnlocked, (req, res) 
         return res.status(500).json({ error: 'Failed to save' });
     }
     res.json({ ok: true, agentRecipients });
+});
+
+// Health-watchdog mail settings: who receives the daily digest and when it
+// goes out. Read by bin/health-watchdog.js on each tick, so the systemd timer
+// can stay on a short heartbeat and the schedule lives here instead.
+app.get('/api/health-alert-config', requireAdmin, (req, res) => {
+    const now = Date.now();
+    res.json({
+        config: healthConfig,
+        knownRecipients: knownRecipientList(),
+        nextSendAt: healthcheck.nextSendAt({ nowMs: now, schedule: healthConfig.schedule }),
+        defaults: healthcheck.defaultHealthConfig()
+    });
+});
+
+app.put('/api/health-alert-config', requireAdmin, requireAdminUnlocked, (req, res) => {
+    const check = healthcheck.validateHealthConfig(req.body);
+    if (!check.ok) return res.status(400).json({ error: check.error });
+    const merged = healthcheck.normalizeHealthConfig({ ...healthConfig, ...check.value });
+    healthConfig = merged;
+    try {
+        saveHealthConfig();
+    } catch (err) {
+        console.error('Failed to persist health-alert-config.json:', err);
+        return res.status(500).json({ error: 'Failed to save' });
+    }
+    res.json({
+        ok: true,
+        config: healthConfig,
+        nextSendAt: healthcheck.nextSendAt({ nowMs: Date.now(), schedule: healthConfig.schedule })
+    });
+});
+
+// Fire the digest immediately with the current live data, so an admin can
+// confirm recipients and formatting without waiting for the scheduled slot.
+app.post('/api/health-alert-config/test', requireAdmin, requireAdminUnlocked, async (req, res) => {
+    const alerts = require('./lib/alerts');
+    const child = require('node:child_process');
+    const now = Date.now();
+    const due = healthcheck.nextSendAt({ nowMs: now, schedule: healthConfig.schedule });
+    // Probe + render in-process so the test reflects the configured recipients
+    // and stale threshold rather than whatever the file happens to hold.
+    try {
+        const sites = JSON.parse(fs.readFileSync(SITES_PATH, 'utf8'));
+        const results = await healthcheck.checkAllSites(sites, { staleDays: healthConfig.staleDays, nowMs: now });
+        const ollama = await healthcheck.checkOllama();
+        const summary = healthcheck.summarize(results, now);
+        const { renderDigest } = require('./lib/healthDigest');
+        const { subject, html, text } = renderDigest({ results, summary, ollama, config: healthConfig, nowMs: now, isTest: true });
+        const r = healthConfig.recipients;
+        await alerts.sendMail({
+            to: r.to.length ? r.to : undefined,
+            cc: r.cc.length ? r.cc : undefined,
+            bcc: r.bcc.length ? r.bcc : undefined,
+            subject, text, html
+        });
+        res.json({ ok: true, subject, unreachable: summary.unreachable, stale: summary.stale, nextSendAt: due });
+    } catch (err) {
+        console.error('Health digest test failed:', err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/compliance-fields', requireAuth, (req, res) => {

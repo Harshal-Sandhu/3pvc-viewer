@@ -75,6 +75,22 @@ const els = {
     agentRecipientsSendRelay: $('#agent-recipients-send-relay'),
     agentRecipientsSendRtp: $('#agent-recipients-send-rtp'),
 
+    healthAlertForm: $('#health-alert-form'),
+    healthAlertEnabled: $('#health-alert-enabled'),
+    healthAlertTime: $('#health-alert-time'),
+    healthAlertStale: $('#health-alert-stale'),
+    healthAlertDays: $('#health-alert-days'),
+    healthAlertRecipientList: $('#health-alert-recipient-list'),
+    healthAlertTo: $('#health-alert-to'),
+    healthAlertCc: $('#health-alert-cc'),
+    healthAlertBcc: $('#health-alert-bcc'),
+    healthAlertWhenHealthy: $('#health-alert-when-healthy'),
+    healthAlertNewOutage: $('#health-alert-new-outage'),
+    healthAlertNext: $('#health-alert-next'),
+    healthAlertSave: $('#health-alert-save'),
+    healthAlertTest: $('#health-alert-test'),
+    healthAlertMsg: $('#health-alert-msg'),
+
     deleteModal: $('#delete-modal'),
     deleteModalClose: $('#delete-modal-close'),
     deleteSiteName: $('#delete-site-name'),
@@ -97,7 +113,9 @@ const state = {
     sites: [],
     fields: [],
     pendingDelete: null,
-    compBots: []   // [{ botId, ip }] live bots for the currently selected compliance site
+    compBots: [],   // [{ botId, ip }] live bots for the currently selected compliance site
+    healthConfig: null,
+    healthKnown: []  // addresses from mail-recipients.json, offered as checkboxes
 };
 
 async function api(path, opts = {}) {
@@ -196,6 +214,8 @@ function wireEvents() {
     els.agentRecipientsSendTtp.addEventListener('click', () => onAgentRecipientsSend('TTP', els.agentRecipientsSendTtp));
     els.agentRecipientsSendRelay.addEventListener('click', () => onAgentRecipientsSend('RELAY', els.agentRecipientsSendRelay));
     els.agentRecipientsSendRtp.addEventListener('click', () => onAgentRecipientsSend('RTP', els.agentRecipientsSendRtp));
+    els.healthAlertForm.addEventListener('submit', onHealthAlertSave);
+    els.healthAlertTest.addEventListener('click', onHealthAlertTest);
     els.compSite.addEventListener('change', onCompSiteChange);
     els.compBot.addEventListener('change', () => { els.compImport.disabled = !els.compBot.value; });
     els.compImport.addEventListener('click', onCompImport);
@@ -232,6 +252,7 @@ async function refreshAll() {
         renderCompliancePicker();
         renderComplianceFields();
         renderAgentRecipients();
+        loadHealthAlert();
         updateCompTarget();
         await loadUsage();
     } catch (err) {
@@ -329,6 +350,158 @@ async function onAgentRecipientsSend(agentType, btn) {
     } finally {
         btn.disabled = false;
         btn.textContent = originalLabel;
+    }
+}
+
+// --- Health watchdog digest -------------------------------------------------
+// Recipients are the union of the ticked known addresses and whatever is typed
+// into the To/CC/BCC boxes, so the common case is a tick and the escape hatch
+// is still free text.
+
+function healthMsg(text, isError) {
+    els.healthAlertMsg.textContent = text || '';
+    els.healthAlertMsg.classList.toggle('error', !!isError);
+}
+
+function healthSelectedRecipients() {
+    const picked = new Set();
+    els.healthAlertRecipientList.querySelectorAll('input[type=checkbox]:checked').forEach(cb => picked.add(cb.value));
+    for (const field of ['healthAlertTo', 'healthAlertCc', 'healthAlertBcc']) {
+        asEmailList(els[field].value).forEach(v => picked.add(v.toLowerCase()));
+    }
+    return picked;
+}
+
+function healthExtraRecipients() {
+    const ticked = new Set();
+    els.healthAlertRecipientList.querySelectorAll('input[type=checkbox]:checked').forEach(cb => ticked.add(cb.value));
+    return asEmailList(els.healthAlertTo.value).filter(v => !ticked.has(v.toLowerCase()));
+}
+
+function renderHealthAlert(data) {
+    const cfg = data.config || {};
+    state.healthConfig = cfg;
+    state.healthKnown = data.knownRecipients || [];
+
+    els.healthAlertEnabled.value = String(cfg.enabled !== false);
+    els.healthAlertTime.value = (cfg.schedule && cfg.schedule.time) || '08:00';
+    els.healthAlertStale.value = (cfg.staleDays != null) ? cfg.staleDays : 3;
+    els.healthAlertWhenHealthy.checked = cfg.sendWhenAllHealthy !== false;
+    els.healthAlertNewOutage.checked = !!cfg.alertOnNewOutage;
+
+    const days = new Set((cfg.schedule && cfg.schedule.dayOfWeek) || [0, 1, 2, 3, 4, 5, 6]);
+    els.healthAlertDays.querySelectorAll('input[type=checkbox]').forEach(cb => {
+        cb.checked = days.has(Number(cb.value));
+    });
+
+    // Ticked set = configured recipients minus any that also appear in the
+    // free-text boxes (those are shown there instead, to avoid duplication).
+    const typed = new Set();
+    for (const f of ['healthAlertTo', 'healthAlertCc', 'healthAlertBcc']) {
+        asEmailList(els[f].value).forEach(v => typed.add(v.toLowerCase()));
+    }
+    const configured = new Set([
+        ...((cfg.recipients && cfg.recipients.to) || []),
+        ...((cfg.recipients && cfg.recipients.cc) || []),
+        ...((cfg.recipients && cfg.recipients.bcc) || [])
+    ].map(v => String(v).toLowerCase()));
+
+    els.healthAlertRecipientList.innerHTML = '';
+    for (const addr of state.healthKnown) {
+        const label = document.createElement('label');
+        label.className = 'checkbox-row';
+        label.style.fontSize = '0.8rem';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = addr;
+        cb.checked = configured.has(addr) && !typed.has(addr);
+        const span = document.createElement('span');
+        span.textContent = addr;
+        label.append(cb, span);
+        els.healthAlertRecipientList.appendChild(label);
+    }
+    if (!state.healthKnown.length) {
+        const p = document.createElement('span');
+        p.className = 'muted small';
+        p.textContent = 'No known recipients found in mail-recipients.json — use the boxes below.';
+        els.healthAlertRecipientList.appendChild(p);
+    }
+
+    // Anything configured that isn't in the known list stays visible as text.
+    els.healthAlertTo.value = (((cfg.recipients && cfg.recipients.to) || []).filter(v => !state.healthKnown.includes(v))).join(', ');
+    els.healthAlertCc.value = (((cfg.recipients && cfg.recipients.cc) || []).filter(v => !state.healthKnown.includes(v))).join(', ');
+    els.healthAlertBcc.value = (((cfg.recipients && cfg.recipients.bcc) || []).filter(v => !state.healthKnown.includes(v))).join(', ');
+
+    if (data.nextSendAt) {
+        const d = new Date(data.nextSendAt);
+        els.healthAlertNext.textContent = `Next digest: ${d.toLocaleString()}`;
+    } else {
+        els.healthAlertNext.textContent = 'Next digest: not scheduled (no send days selected)';
+    }
+}
+
+function collectHealthConfig() {
+    const to = new Set();
+    const cc = new Set();
+    const bcc = new Set();
+    els.healthAlertRecipientList.querySelectorAll('input[type=checkbox]:checked').forEach(cb => to.add(cb.value));
+    healthExtraRecipients().forEach(v => to.add(v));
+    asEmailList(els.healthAlertCc.value).forEach(v => cc.add(v.toLowerCase()));
+    asEmailList(els.healthAlertBcc.value).forEach(v => bcc.add(v.toLowerCase()));
+
+    const dayOfWeek = Array.from(els.healthAlertDays.querySelectorAll('input[type=checkbox]:checked'))
+        .map(cb => Number(cb.value)).sort((a, b) => a - b);
+
+    return {
+        enabled: els.healthAlertEnabled.value === 'true',
+        staleDays: Number(els.healthAlertStale.value),
+        recipients: { to: [...to], cc: [...cc], bcc: [...bcc] },
+        schedule: { time: els.healthAlertTime.value, dayOfWeek },
+        sendWhenAllHealthy: els.healthAlertWhenHealthy.checked,
+        alertOnNewOutage: els.healthAlertNewOutage.checked
+    };
+}
+
+async function loadHealthAlert() {
+    try {
+        const data = await api('/api/health-alert-config');
+        renderHealthAlert(data);
+    } catch (e) {
+        healthMsg(`Could not load digest settings: ${e.message}`, true);
+    }
+}
+
+async function onHealthAlertSave(e) {
+    e.preventDefault();
+    const payload = collectHealthConfig();
+    if (!payload.schedule.dayOfWeek.length) {
+        healthMsg('Pick at least one day to send on.', true);
+        return;
+    }
+    try {
+        els.healthAlertSave.disabled = true;
+        healthMsg('Saving…');
+        const res = await api('/api/health-alert-config', { method: 'PUT', body: JSON.stringify(payload) });
+        state.healthConfig = res.config;
+        if (res.nextSendAt) els.healthAlertNext.textContent = `Next digest: ${new Date(res.nextSendAt).toLocaleString()}`;
+        healthMsg('Saved. The watchdog picks this up on its next check — no restart needed.');
+    } catch (err) {
+        healthMsg(err.message, true);
+    } finally {
+        els.healthAlertSave.disabled = false;
+    }
+}
+
+async function onHealthAlertTest() {
+    try {
+        els.healthAlertTest.disabled = true;
+        healthMsg('Probing sites and sending — this can take up to a minute…');
+        const res = await api('/api/health-alert-config/test', { method: 'POST' });
+        healthMsg(`Test digest sent. Subject: ${res.subject}`);
+    } catch (err) {
+        healthMsg(`Test failed: ${err.message}`, true);
+    } finally {
+        els.healthAlertTest.disabled = false;
     }
 }
 

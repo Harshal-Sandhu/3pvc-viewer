@@ -171,6 +171,82 @@
 
         <section class="card">
             <div class="card-head">
+                <h2 class="card-title">Health watchdog digest</h2>
+            </div>
+            <p class="muted small" style="margin:0 0 0.75rem;">
+                A daily status mail listing every site — reachable or not, newest data timestamp, age and the reason
+                anything is flagged. The server checks continuously and sends once a day at the time you choose.
+                Stale means no data newer than the threshold below.
+            </p>
+            <form id="health-alert-form" autocomplete="off">
+                <div class="form-grid">
+                    <label>Digest
+                        <select id="health-alert-enabled">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled (checks continue, no mail)</option>
+                        </select>
+                    </label>
+                    <label>Send at
+                        <input type="time" id="health-alert-time" value="08:00">
+                    </label>
+                    <label>Stale threshold (days)
+                        <input type="number" id="health-alert-stale" min="1" max="365" step="1">
+                    </label>
+                </div>
+
+                <fieldset style="border:1px solid var(--border);border-radius:8px;padding:0.75rem 1rem;margin:0.75rem 0;">
+                    <legend style="padding:0 0.4rem;font-weight:600;">Send on these days</legend>
+                    <div id="health-alert-days" style="display:flex;gap:1rem;flex-wrap:wrap;">
+                        <label class="checkbox-row"><input type="checkbox" value="1"> Mon</label>
+                        <label class="checkbox-row"><input type="checkbox" value="2"> Tue</label>
+                        <label class="checkbox-row"><input type="checkbox" value="3"> Wed</label>
+                        <label class="checkbox-row"><input type="checkbox" value="4"> Thu</label>
+                        <label class="checkbox-row"><input type="checkbox" value="5"> Fri</label>
+                        <label class="checkbox-row"><input type="checkbox" value="6"> Sat</label>
+                        <label class="checkbox-row"><input type="checkbox" value="0"> Sun</label>
+                    </div>
+                </fieldset>
+
+                <fieldset style="border:1px solid var(--border);border-radius:8px;padding:0.75rem 1rem;margin:0 0 0.75rem;">
+                    <legend style="padding:0 0.4rem;font-weight:600;">Recipients</legend>
+                    <p class="muted small" style="margin:0 0 0.5rem;">
+                        Tick who receives the digest. Leave every box empty to fall back to
+                        <code>product-validation@greyorange.com</code>. Add anyone else below.
+                    </p>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:0.25rem 1rem;max-height:190px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:0.6rem;">
+                        <div id="health-alert-recipient-list" style="display:contents;"></div>
+                    </div>
+                    <div class="form-grid" style="margin-top:0.75rem;">
+                        <label>To
+                            <input type="text" id="health-alert-to" placeholder="primary@example.com">
+                        </label>
+                        <label>CC
+                            <input type="text" id="health-alert-cc" placeholder="lead@example.com">
+                        </label>
+                        <label>BCC
+                            <input type="text" id="health-alert-bcc" placeholder="archive@example.com">
+                        </label>
+                    </div>
+                    <p class="muted small" style="margin:0.4rem 0 0;">Comma-separated. These are merged with the ticked boxes above.</p>
+                </fieldset>
+
+                <div style="display:flex;flex-direction:column;gap:0.4rem;">
+                    <label class="checkbox-row"><input type="checkbox" id="health-alert-when-healthy"> Send the daily digest even when every site is healthy</label>
+                    <label class="checkbox-row"><input type="checkbox" id="health-alert-new-outage"> Also mail immediately when a site becomes unreachable, ignoring the daily time</label>
+                </div>
+
+                <p class="muted small" id="health-alert-next" style="margin:0.75rem 0 0;"></p>
+
+                <div class="form-actions">
+                    <button type="submit" id="health-alert-save">Save</button>
+                    <button type="button" id="health-alert-test" class="btn-subtle">Send test digest now</button>
+                </div>
+                <p class="small" id="health-alert-msg" style="margin:0.6rem 0 0;"></p>
+            </form>
+        </section>
+
+        <section class="card">
+            <div class="card-head">
                 <h2 class="card-title">Add compliance record</h2>
             </div>
             <p class="muted small" style="margin:0 0 0.75rem;">
