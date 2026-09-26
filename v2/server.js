@@ -92,6 +92,16 @@ function saveHealthConfig() {
     fs.writeFileSync(tmp, JSON.stringify(healthConfig, null, 2));
     fs.renameSync(tmp, HEALTH_CONFIG_PATH);
 }
+// Re-read on demand so a hand-edited file is picked up without a restart.
+// The watchdog process reads the file itself, so it never goes stale.
+function reloadHealthConfig() {
+    try {
+        healthConfig = healthcheck.normalizeHealthConfig(JSON.parse(fs.readFileSync(HEALTH_CONFIG_PATH, 'utf8')));
+    } catch (e) {
+        if (e.code !== 'ENOENT') console.error('Failed to reload health-alert-config.json:', e.message);
+    }
+    return healthConfig;
+}
 // People already present in mail-recipients.json, offered as ready-made
 // choices in the admin UI so nobody has to type addresses by hand.
 function knownRecipientList() {
@@ -527,10 +537,11 @@ app.put('/api/agent-recipients', requireAdmin, requireAdminUnlocked, (req, res) 
 // can stay on a short heartbeat and the schedule lives here instead.
 app.get('/api/health-alert-config', requireAdmin, (req, res) => {
     const now = Date.now();
+    const cfg = reloadHealthConfig();
     res.json({
-        config: healthConfig,
+        config: cfg,
         knownRecipients: knownRecipientList(),
-        nextSendAt: healthcheck.nextSendAt({ nowMs: now, schedule: healthConfig.schedule }),
+        nextSendAt: healthcheck.nextSendAt({ nowMs: now, schedule: cfg.schedule }),
         defaults: healthcheck.defaultHealthConfig()
     });
 });
@@ -557,19 +568,19 @@ app.put('/api/health-alert-config', requireAdmin, requireAdminUnlocked, (req, re
 // confirm recipients and formatting without waiting for the scheduled slot.
 app.post('/api/health-alert-config/test', requireAdmin, requireAdminUnlocked, async (req, res) => {
     const alerts = require('./lib/alerts');
-    const child = require('node:child_process');
     const now = Date.now();
-    const due = healthcheck.nextSendAt({ nowMs: now, schedule: healthConfig.schedule });
+    const cfg = reloadHealthConfig();
+    const due = healthcheck.nextSendAt({ nowMs: now, schedule: cfg.schedule });
     // Probe + render in-process so the test reflects the configured recipients
     // and stale threshold rather than whatever the file happens to hold.
     try {
         const sites = JSON.parse(fs.readFileSync(SITES_PATH, 'utf8'));
-        const results = await healthcheck.checkAllSites(sites, { staleDays: healthConfig.staleDays, nowMs: now });
+        const results = await healthcheck.checkAllSites(sites, { staleDays: cfg.staleDays, nowMs: now });
         const ollama = await healthcheck.checkOllama();
         const summary = healthcheck.summarize(results, now);
         const { renderDigest } = require('./lib/healthDigest');
-        const { subject, html, text } = renderDigest({ results, summary, ollama, config: healthConfig, nowMs: now, isTest: true });
-        const r = healthConfig.recipients;
+        const { subject, html, text } = renderDigest({ results, summary, ollama, config: cfg, nowMs: now, isTest: true });
+        const r = cfg.recipients;
         await alerts.sendMail({
             to: r.to.length ? r.to : undefined,
             cc: r.cc.length ? r.cc : undefined,
