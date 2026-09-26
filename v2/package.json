@@ -9,7 +9,8 @@
     "test": "node --test",
     "hash-password": "node scripts/hash-password.js",
     "oauth-setup": "node scripts/oauth-setup.js",
-    "scheduler": "node scheduler.js"
+    "scheduler": "node scheduler.js",
+    "health-watchdog": "node bin/health-watchdog.js"
   },
   "engines": {
     "node": ">=18.0.0"
