@@ -20,7 +20,9 @@ const net = require('net');
 
 const DEFAULT_STALE_DAYS  = 3;
 const DEFAULT_TCP_TIMEOUT_MS     = 5000;
-const DEFAULT_HTTP_TIMEOUT_MS    = 10000;
+// 30s matches the viewer's site-columns Influx timeout — a remote site can be
+// slow to answer, and a short timeout here would raise a false alert.
+const DEFAULT_HTTP_TIMEOUT_MS    = 30000;
 const OLLAMA_DEFAULT_URL  = 'http://127.0.0.1:11434';
 
 // ---------------------------------------------------------------------------
@@ -158,15 +160,13 @@ function checkSite(siteName, site, opts = {}) {
             return { ...base, reachable: true, noMeasurement: true };
         }
 
-        // Newest row + recent activity, in ONE aggregate-free query.
-        // Some site InfluxDBs (1.8.10 OSS behind a proxy) return an empty
-        // series for last()/count() queries, so we deliberately avoid
-        // aggregates: select recent rows ordered newest-first and read the
-        // timestamp off the first row. ORDER BY DESC + LIMIT guarantees the
-        // newest rows are the ones returned, so the freshness answer stays
-        // correct even if the window holds more rows than the LIMIT.
-        const window = `${staleDays * 2}d`;
-        const q = `SELECT * FROM "${measurement}" WHERE time > now() - ${window} ORDER BY time DESC LIMIT 5000`;
+        // Newest row only — we need just its timestamp, so LIMIT 1. A wide
+        // `SELECT * ... LIMIT 5000` takes 15-30s+ on these sites and would
+        // time out, producing false "unreachable" alerts even though the
+        // viewer reads the same data fine. LIMIT 1 returns in well under a
+        // second. Also aggregate-free (ORDER BY DESC): these InfluxDB 1.8.10
+        // instances return an empty series for last()/count() queries.
+        const q = `SELECT * FROM "${measurement}" WHERE time > now() - ${staleDays * 2}d ORDER BY time DESC LIMIT 1`;
         const url = `http://${site.ip}:${port}/query?db=${encodeURIComponent(site.db)}&q=${encodeURIComponent(q)}`;
         const res = await httpGet(url, httpTimeout);
         if (!res.ok) return { ...base, error: `query failed: ${res.error || `HTTP ${res.status}`}` };
@@ -196,7 +196,8 @@ function checkSite(siteName, site, opts = {}) {
 // Probe the local Ollama instance. Returns { name:'ollama', reachable, models[] }.
 async function checkOllama(opts = {}) {
     const url = opts.url || process.env.OLLAMA_URL || OLLAMA_DEFAULT_URL;
-    const timeout = opts.httpTimeoutMs || DEFAULT_HTTP_TIMEOUT_MS;
+    // Ollama is local — it either answers in well under a second or is down.
+    const timeout = opts.httpTimeoutMs || 5000;
     const res = await httpGet(`${url.replace(/\/$/, '')}/api/tags`, timeout);
     if (!res.ok) {
         return { name: 'ollama', reachable: false, url, error: res.error || `HTTP ${res.status}` };
