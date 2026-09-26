@@ -91,7 +91,7 @@ function renderAlert(summary, ollama, args, resolvedFrom) {
     const issueRows = summary.issues.map(i => `
         <tr>
             <td style="padding:6px 10px;border-bottom:1px solid #eee"><b>${esc(i.name)}</b></td>
-            <td style="padding:6px 10px;border-bottom:1px solid #eee;color:${i.kind === 'unreachable' ? '#b91c1c' : '#b45309'}">${esc(i.kind)}</td>
+            <td style="padding:6px 10px;border-bottom:1px solid #eee;color:${i.kind === 'unreachable' ? '#b91c1c' : (i.kind === 'check-failed' ? '#b45309' : '#b45309')}">${esc(i.kind)}</td>
             <td style="padding:6px 10px;border-bottom:1px solid #eee">${esc(i.detail)}</td>
         </tr>`).join('');
 
@@ -104,6 +104,7 @@ function renderAlert(summary, ollama, args, resolvedFrom) {
             <tr><td style="padding:4px 14px 4px 0;color:#0a7f30">Healthy</td><td><b>${summary.ok}</b></td></tr>
             <tr><td style="padding:4px 14px 4px 0;color:#b91c1c">Unreachable</td><td><b>${summary.unreachable}</b></td></tr>
             <tr><td style="padding:4px 14px 4px 0;color:#b45309">Stale (&gt;${args.staleDays}d)</td><td><b>${summary.stale}</b></td></tr>
+            <tr><td style="padding:4px 14px 4px 0;color:#b45309">Check failed</td><td><b>${summary.checkFailed}</b></td></tr>
             ${ollama ? `<tr><td style="padding:4px 14px 4px 0;color:${ollama.reachable ? '#0a7f30' : '#b91c1c'}">Ollama (AI)</td><td><b>${ollama.reachable ? 'up' : 'DOWN'}</b></td></tr>` : ''}
         </table>
         <h3 style="margin:16px 0 8px">Affected sites</h3>
@@ -116,8 +117,10 @@ function renderAlert(summary, ollama, args, resolvedFrom) {
             <tbody>${issueRows}</tbody>
         </table>
         <p style="color:#666;margin-top:18px;font-size:12px">
-            Sent by the 3PVC health watchdog. A site is <b>unreachable</b> when its InfluxDB does not answer,
-            and <b>stale</b> when its newest row is older than ${args.staleDays} days.
+            Sent by the 3PVC health watchdog.
+            <b>unreachable</b> = TCP or Influx /ping did not answer (service not responding).
+            <b>stale</b> = reachable, but newest row is older than ${args.staleDays} days.
+            <b>check-failed</b> = reachable, but the freshness query itself failed.
         </p>
     </body></html>`;
 
@@ -130,6 +133,7 @@ function renderAlert(summary, ollama, args, resolvedFrom) {
         `Healthy:          ${summary.ok}`,
         `Unreachable:      ${summary.unreachable}`,
         `Stale (>${args.staleDays}d): ${summary.stale}`,
+        `Check failed:     ${summary.checkFailed}`,
         ollama ? `Ollama (AI):      ${ollama.reachable ? 'up' : 'DOWN'}` : null,
         '',
         'Affected sites:',
@@ -158,11 +162,15 @@ async function main() {
 
     // Per-site one-liner
     for (const r of results) {
-        const state = !r.reachable ? 'UNREACHABLE' : (r.noMeasurement ? 'ok (no measurement)' : (r.latestMs == null ? 'NO DATA' : (hc.isStale(r.latestMs, staleDays, opts.nowMs) ? `STALE (${hc.ageInDays(r.latestMs, opts.nowMs).toFixed(1)}d)` : 'ok')));
+        const state = !r.reachable ? 'UNREACHABLE'
+            : r.noMeasurement ? 'ok (no measurement)'
+            : r.probeFailed ? 'CHECK-FAILED'
+            : r.latestMs == null ? 'NO DATA'
+            : (hc.isStale(r.latestMs, staleDays, opts.nowMs) ? `STALE (${hc.ageInDays(r.latestMs, opts.nowMs).toFixed(1)}d)` : 'ok');
         console.log(`  ${state.padEnd(18)} ${r.name}${r.error ? ` — ${r.error}` : ''}`);
     }
     console.log(`  ${(ollama.reachable ? 'ok' : 'DOWN').padEnd(18)} ollama (${ollama.reachable ? (ollama.models.join(', ') || 'no models') : ollama.error})`);
-    console.log(`summary: ${summary.ok}/${summary.total} healthy, ${summary.unreachable} unreachable, ${summary.stale} stale`);
+    console.log(`summary: ${summary.ok}/${summary.total} healthy, ${summary.unreachable} unreachable, ${summary.stale} stale, ${summary.checkFailed} check-failed`);
 
     if (args.dryRun) {
         console.log('[dry-run] would evaluate alert decision, but not send.');

@@ -85,6 +85,28 @@ test('summarize: reachable with no measurement configured is healthy', () => {
     assert.equal(s.healthy, true);
 });
 
+test('summarize: reachable but freshness query failed -> check-failed, not unreachable', () => {
+    const s = hc.summarize([
+        { name: 'a', reachable: true, probeFailed: true, error: 'query timed out', staleDays: 3, nowMs: NOW }
+    ], NOW);
+    assert.equal(s.healthy, false);
+    assert.equal(s.unreachable, 0, 'must not be counted as unreachable');
+    assert.equal(s.checkFailed, 1);
+    assert.equal(s.issues[0].kind, 'check-failed');
+});
+
+test('summarize: check-failed counted separately from stale', () => {
+    const s = hc.summarize([
+        { name: 'a', reachable: true, latestMs: NOW - 1 * DAY, staleDays: 3, nowMs: NOW },
+        { name: 'b', reachable: true, probeFailed: true, error: 'boom', staleDays: 3, nowMs: NOW },
+        { name: 'c', reachable: true, latestMs: NOW - 9 * DAY, staleDays: 3, nowMs: NOW }
+    ], NOW);
+    assert.equal(s.checkFailed, 1);
+    assert.equal(s.stale, 1);
+    assert.equal(s.unreachable, 0);
+    assert.equal(s.ok, 1);
+});
+
 test('summarize: mixed unreachable + stale', () => {
     const s = hc.summarize([
         { name: 'ok',   reachable: true,  latestMs: NOW - 1 * DAY, staleDays: 3, nowMs: NOW },

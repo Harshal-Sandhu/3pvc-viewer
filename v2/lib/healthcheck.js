@@ -60,6 +60,13 @@ function summarize(results, nowMs) {
             // to judge staleness on, so don't report it.
             continue;
         }
+        if (r.probeFailed) {
+            // Reachable and answering, but the freshness query itself failed
+            // (e.g. the site is so slow it timed out). Distinct from
+            // "unreachable" — we could not determine freshness.
+            issues.push({ name: r.name, kind: 'check-failed', detail: r.error || 'freshness query failed' });
+            continue;
+        }
         if (r.latestMs == null) {
             issues.push({ name: r.name, kind: 'no-data', detail: 'no rows in measurement' });
             continue;
@@ -75,11 +82,13 @@ function summarize(results, nowMs) {
     }
     const unreachable = issues.filter(i => i.kind === 'unreachable').length;
     const stale = issues.filter(i => i.kind === 'stale' || i.kind === 'no-data').length;
+    const checkFailed = issues.filter(i => i.kind === 'check-failed').length;
     return {
         total: results.length,
         ok: results.length - issues.length,
         unreachable,
         stale,
+        checkFailed,
         healthy: issues.length === 0,
         issues
     };
@@ -169,16 +178,18 @@ function checkSite(siteName, site, opts = {}) {
         const q = `SELECT * FROM "${measurement}" WHERE time > now() - ${staleDays * 2}d ORDER BY time DESC LIMIT 1`;
         const url = `http://${site.ip}:${port}/query?db=${encodeURIComponent(site.db)}&q=${encodeURIComponent(q)}`;
         const res = await httpGet(url, httpTimeout);
-        if (!res.ok) return { ...base, error: `query failed: ${res.error || `HTTP ${res.status}`}` };
+        // The site answered /ping, so it IS reachable — a failure here means we
+        // could not determine freshness, not that the site is down.
+        if (!res.ok) return { ...base, reachable: true, probeFailed: true, error: `freshness query failed: ${res.error || `HTTP ${res.status}`}` };
 
         let parsed;
         try {
             parsed = JSON.parse(res.body);
         } catch (e) {
-            return { ...base, error: `bad JSON: ${e.message}` };
+            return { ...base, reachable: true, probeFailed: true, error: `bad JSON: ${e.message}` };
         }
         const r0 = (parsed.results && parsed.results[0]) || {};
-        if (r0.error) return { ...base, error: `influx: ${r0.error}` };
+        if (r0.error) return { ...base, reachable: true, probeFailed: true, error: `influx: ${r0.error}` };
 
         const series = (r0.series && r0.series[0]) || null;
         if (!series || !series.values || !series.values.length) {
